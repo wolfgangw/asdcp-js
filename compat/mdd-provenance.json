@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "project": "AS-DCP Lib",
+    "version": "2.13.3",
+    "repository": "https://github.com/cinecert/asdcplib",
+    "path": "src/MDD.cpp",
+    "sha256": "6fbb6e4aae4f79a1180fcbd45b22ecd17435762e0d2a45d84fbfe5bf00f3db81"
+  },
+  "generated": {
+    "path": "src/generated/mdd.js",
+    "sha256": "5dd2455e9c34c142e7d743fce1106cf9f35ea1f706bc6452ea1778584b369251",
+    "entryCount": 587
+  }
+}

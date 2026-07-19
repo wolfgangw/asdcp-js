@@ -1,0 +1,13 @@
+The metadata identifiers and definitions represented by `MDD_ENTRIES` originate
+in applicable SMPTE standards and metadata registers.
+
+The generated table uses `src/MDD.cpp` from AS-DCP Lib 2.13.3 as its pinned
+implementation input, including that source file's table selection, symbolic
+names, and ordering. The source and generated checksums are recorded in
+`compat/mdd-provenance.json`. Its copyright and redistribution terms are
+reproduced in LICENSE-ASDCP.
+
+The upstream reference source is maintained separately and is not part of this
+repository or the published npm package.
+
+asdcp-js does not provide AS-02 functionality.

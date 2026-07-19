@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "referenceVersion": "2.13.3",
+  "asdcpInfo": {
+    "flags": ["-3", "-c", "-d", "-h", "-H", "-i", "-n", "-r", "-t", "-V"],
+    "essenceTypes": [
+      "MPEG2 video",
+      "PCM audio",
+      "JPEG 2000 pictures",
+      "JPEG 2000 stereoscopic pictures",
+      "Timed Text",
+      "D-Cinema Generic Data",
+      "Dolby ATMOS"
+    ],
+    "identityFields": [
+      "ProductUUID",
+      "ProductVersion",
+      "CompanyName",
+      "ProductName",
+      "EncryptedEssence",
+      "HMAC",
+      "ContextID",
+      "CryptographicKeyID",
+      "AssetUUID",
+      "Label Set Type"
+    ]
+  },
+  "asdcpUnwrap": {
+    "flags": ["-1", "-2", "-3", "-b", "-d", "-e", "-f", "-G", "-h", "-k", "-m", "-p", "-s", "-V", "-v", "-W", "-w", "-z", "-Z"],
+    "encryptedExtraction": true,
+    "hmacVerification": true
+  }
+}

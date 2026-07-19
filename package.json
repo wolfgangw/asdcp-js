@@ -1,0 +1,38 @@
+{
+  "name": "asdcp-js",
+  "version": "0.1.0",
+  "description": "JavaScript file access for AS-DCP MXF track files",
+  "license": "BSD-3-Clause",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "compat",
+    "docs",
+    "src",
+    "README.md",
+    "LICENSE",
+    "LICENSE-ASDCP",
+    "NOTICE"
+  ],
+  "exports": {
+    ".": "./src/index.js",
+    "./browser": "./src/browser.js",
+    "./node": "./src/node.js",
+    "./mxf": "./src/mxf.js"
+  },
+  "scripts": {
+    "check": "npm run check:mdd && npm run check:syntax && npm run test:unit && npm run pack:check",
+    "check:mdd": "node scripts/check-mdd.mjs",
+    "check:syntax": "node scripts/check-syntax.mjs",
+    "generate:mdd": "node scripts/generate-mdd.mjs",
+    "pack:check": "node scripts/check-package.mjs",
+    "reference:check": "node scripts/check-reference.mjs",
+    "test": "npm run test:unit",
+    "test:parity": "npm run reference:check && node --test test/parity/*.test.js",
+    "test:unit": "node --test test/unit/*.test.js",
+    "verify": "npm run check && npm run test:parity"
+  }
+}
