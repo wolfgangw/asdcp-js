@@ -90,9 +90,22 @@ async function inspectMxfInternal(source, { signal, includeIndex }) {
     micAlgorithm: optionalHexByUl(cryptographicContext, CRYPTO_ULS.micAlgorithm),
     cryptographicKeyId: optionalUuidByUl(cryptographicContext, CRYPTO_ULS.cryptographicKeyId)
   } : null;
-  const essence = detectEssence(headerMetadata);
-  const parsedDescriptor = parseEssenceDescriptor(headerMetadata, essence.type);
+  let essence = detectEssence(headerMetadata);
+  let parsedDescriptor = parseEssenceDescriptor(headerMetadata, essence.type);
   const trackEditRate = sourceTrackEditRate(metadataGraph);
+  if (isInteropStereoscopicPicture({
+    labelSetType,
+    essenceType: essence.type,
+    editRate: trackEditRate,
+    sampleRate: parsedDescriptor?.sampleRate
+  })) {
+    essence = {
+      ...essence,
+      type: 'jpeg-2000-stereoscopic',
+      description: 'JPEG 2000 stereoscopic pictures'
+    };
+    parsedDescriptor = parseEssenceDescriptor(headerMetadata, essence.type);
+  }
   const descriptor = parsedDescriptor && trackEditRate
     ? { ...parsedDescriptor, editRate: trackEditRate }
     : parsedDescriptor;
@@ -191,6 +204,30 @@ function detectEssence(headerMetadata) {
     description,
     editUnitCount: duration ? readInt64(duration, 'ContainerDuration') : null
   };
+}
+
+const INTEROP_STEREOSCOPIC_EDIT_RATES = Object.freeze([
+  24, 25, 30, 48, 50, 60, 96, 100, 120
+]);
+
+export function isInteropStereoscopicPicture({
+  labelSetType,
+  essenceType,
+  editRate,
+  sampleRate
+}) {
+  if (labelSetType !== 'MXF Interop' || essenceType !== 'jpeg-2000') return false;
+  return INTEROP_STEREOSCOPIC_EDIT_RATES.some((rate) => (
+    rationalEqualsInteger(editRate, rate)
+    && rationalEqualsInteger(sampleRate, rate * 2)
+  ));
+}
+
+function rationalEqualsInteger(rational, integer) {
+  return Number.isInteger(rational?.numerator)
+    && Number.isInteger(rational?.denominator)
+    && rational.denominator !== 0
+    && rational.numerator === integer * rational.denominator;
 }
 
 function sourceTrackEditRate(metadataGraph) {
