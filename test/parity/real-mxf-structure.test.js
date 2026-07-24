@@ -50,6 +50,12 @@ const stereoscopicFixture = {
   assetUuid: '4316f306-3d64-4e62-bab6-5cc3b948d5c2'
 };
 
+const interopStereoscopicFixture = {
+  path: 'MadMieter_SHR-3D-25_F_DE-XX_DE_51_2K_CPP_20191025_CPP_IOP-3D_OV/'
+    + '01_Render_B_01_5DB2FAA7B0EE0031.mxf',
+  assetUuid: 'b7d301ef-a8a9-4632-a839-b47f413b23fe'
+};
+
 test('real DCP MXFs have matching native identity and bounded JS structure reads', async (context) => {
   const firstPath = resolve(fixtureRoot, fixtures[0].path);
   try {
@@ -232,6 +238,35 @@ test('stereoscopic MXF keeps edit rate distinct from picture sample rate', async
       formatAsdcpInfo(inspected, { showIdentity: false, showDescriptor: true }),
       native.stdout
     );
+  } finally {
+    await source.close();
+  }
+});
+
+test('Interop stereoscopic MXF is classified from its AS-DCP rate pair', async (context) => {
+  const path = resolve(fixtureRoot, interopStereoscopicFixture.path);
+  try {
+    await access(path);
+  } catch {
+    context.skip('MadMieter Interop stereoscopic fixture is not installed');
+    return;
+  }
+
+  const source = await NodeFileRandomAccessSource.open(path);
+  try {
+    const inspected = await inspectMxf(source);
+    assert.equal(inspected.writerInfo.assetUuid, interopStereoscopicFixture.assetUuid);
+    assert.equal(inspected.writerInfo.labelSetType, 'MXF Interop');
+    assert.equal(inspected.essence.type, 'jpeg-2000-stereoscopic');
+    assert.equal(inspected.essence.description, 'JPEG 2000 stereoscopic pictures');
+    assert.equal(inspected.descriptor.stereoscopic, true);
+    assert.deepEqual(inspected.descriptor.editRate, { numerator: 25, denominator: 1 });
+    assert.deepEqual(inspected.descriptor.sampleRate, { numerator: 50, denominator: 1 });
+
+    const tools = await assertReferenceTools();
+    const native = await runNative(tools.infoPath, ['-3', '-i', path]);
+    assert.equal(native.code, 0, native.stderr);
+    assert.equal(formatAsdcpInfo(inspected), native.stdout);
   } finally {
     await source.close();
   }
