@@ -7,9 +7,89 @@ import {
   parseGenericDataDescriptor,
   parseJpeg2000Descriptor,
   parseMpeg2Descriptor,
+  parsePcmDescriptor,
   parseTimedTextDescriptor
 } from '../../src/asdcp/descriptors.js';
 import { mdd } from '../../src/mxf/dictionary.js';
+import { buildMetadataGraph } from '../../src/mxf/metadata-graph.js';
+
+test('PCM descriptor resolves MCA dictionary labels to individual channel roles', () => {
+  const waveId = uuid(1);
+  const soundfieldId = uuid(2);
+  const leftId = uuid(3);
+  const hiId = uuid(4);
+  const soundfieldLinkId = uuid(5);
+  const header = metadata([
+    set('WaveAudioDescriptor', {
+      InterchangeObject_InstanceUID: waveId,
+      GenericDescriptor_SubDescriptors: uuidBatch([soundfieldId, leftId, hiId]),
+      FileDescriptor_SampleRate: rational(24, 1),
+      GenericSoundEssenceDescriptor_AudioSamplingRate: rational(48_000, 1),
+      GenericSoundEssenceDescriptor_ChannelCount: u32(2),
+      GenericSoundEssenceDescriptor_QuantizationBits: u32(24),
+      WaveAudioDescriptor_BlockAlign: u16(6),
+      WaveAudioDescriptor_AvgBps: u32(288_000),
+      FileDescriptor_ContainerDuration: i64(240n),
+      FileDescriptor_EssenceContainer: ul(0x01),
+      WaveAudioDescriptor_ChannelAssignment: namedUl('DCAudioChannelCfg_4_WTF')
+    }),
+    set('SoundfieldGroupLabelSubDescriptor', {
+      InterchangeObject_InstanceUID: soundfieldId,
+      MCALabelSubDescriptor_MCALabelDictionaryID: namedUl('DCAudioSoundfield_51'),
+      MCALabelSubDescriptor_MCALinkID: soundfieldLinkId,
+      MCALabelSubDescriptor_MCATagSymbol: utf16('sg51'),
+      MCALabelSubDescriptor_MCATagName: utf16('5.1')
+    }),
+    set('AudioChannelLabelSubDescriptor', {
+      InterchangeObject_InstanceUID: leftId,
+      MCALabelSubDescriptor_MCALabelDictionaryID: namedUl('DCAudioChannel_L'),
+      MCALabelSubDescriptor_MCALinkID: uuid(6),
+      MCALabelSubDescriptor_MCATagSymbol: utf16('chL'),
+      MCALabelSubDescriptor_MCATagName: utf16('Left'),
+      MCALabelSubDescriptor_MCAChannelID: u32(1),
+      MCALabelSubDescriptor_RFC5646SpokenLanguage: ascii('en-US'),
+      AudioChannelLabelSubDescriptor_SoundfieldGroupLinkID: soundfieldLinkId
+    }),
+    set('AudioChannelLabelSubDescriptor', {
+      InterchangeObject_InstanceUID: hiId,
+      MCALabelSubDescriptor_MCALabelDictionaryID: namedUl('DCAudioChannel_HI'),
+      MCALabelSubDescriptor_MCALinkID: uuid(7),
+      MCALabelSubDescriptor_MCATagSymbol: utf16('chHI'),
+      MCALabelSubDescriptor_MCAChannelID: u32(2),
+      AudioChannelLabelSubDescriptor_SoundfieldGroupLinkID: soundfieldLinkId
+    })
+  ]);
+
+  const descriptor = parsePcmDescriptor(header, { metadataGraph: buildMetadataGraph(header) });
+  assert.deepEqual(descriptor.channelLayout, { source: 'mca', name: 'sg51', resolved: true });
+  assert.deepEqual(descriptor.audioChannels.map(({ channelId, role, symbol, programme, language }) => ({
+    channelId, role, symbol, programme, language
+  })), [
+    { channelId: 1, role: 'L', symbol: 'chL', programme: true, language: 'en-US' },
+    { channelId: 2, role: 'HI', symbol: 'chHI', programme: false, language: null }
+  ]);
+  assert.equal(descriptor.mcaLabels.soundfieldGroups[0].name, '5.1');
+});
+
+test('PCM descriptor exposes the fixed 7.1 SDS channel assignment', () => {
+  const header = metadata([set('WaveAudioDescriptor', {
+    FileDescriptor_SampleRate: rational(24, 1),
+    GenericSoundEssenceDescriptor_AudioSamplingRate: rational(48_000, 1),
+    GenericSoundEssenceDescriptor_ChannelCount: u32(8),
+    GenericSoundEssenceDescriptor_QuantizationBits: u32(24),
+    WaveAudioDescriptor_BlockAlign: u16(24),
+    WaveAudioDescriptor_AvgBps: u32(1_152_000),
+    FileDescriptor_ContainerDuration: i64(240n),
+    FileDescriptor_EssenceContainer: ul(0x01),
+    WaveAudioDescriptor_ChannelAssignment: namedUl('DCAudioChannelCfg_3_7p1')
+  })]);
+
+  const descriptor = parsePcmDescriptor(header);
+  assert.deepEqual(descriptor.audioChannels.map(({ role }) => role), [
+    'L', 'R', 'C', 'LFE', 'Ls', 'Rs', 'Lc', 'Rc'
+  ]);
+  assert.equal(descriptor.channelLayout.name, '7.1 SDS');
+});
 
 test('MPEG-2 descriptor decodes CDCI and coding properties', () => {
   const header = metadata([
@@ -158,12 +238,14 @@ function metadata(localSets) {
 }
 
 function set(type, properties) {
+  const dictionaryEntry = mdd(type);
   const items = Object.entries(properties).map(([name, bytes]) => {
     const entry = mdd(name);
     return { tag: entry.tag, ulHex: entry.ulHex, dictionaryEntry: entry, value: bytes };
   });
   return {
-    keyHex: mdd(type).ulHex,
+    keyHex: dictionaryEntry.ulHex,
+    dictionaryEntry,
     localSet: {
       items,
       byTag: new Map(items.map((item) => [item.tag, item])),
@@ -213,6 +295,22 @@ function utf16(value) {
 
 function uuid(byte) {
   return new Uint8Array(16).fill(byte);
+}
+
+function uuidBatch(values) {
+  return Uint8Array.of(
+    0, 0, 0, values.length,
+    0, 0, 0, 16,
+    ...values.flatMap((value) => Array.from(value))
+  );
+}
+
+function ascii(value) {
+  return new TextEncoder().encode(value);
+}
+
+function namedUl(name) {
+  return Uint8Array.from(mdd(name).ulHex.match(/../gu), (byte) => Number.parseInt(byte, 16));
 }
 
 function ul(lastByte) {
