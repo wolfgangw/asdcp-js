@@ -102,6 +102,14 @@ const TYPES = new Map(Object.entries({
   WaveAudioDescriptor_AvgBps: 'uint32',
   WaveAudioDescriptor_SequenceOffset: 'uint8',
   WaveAudioDescriptor_ChannelAssignment: 'ul',
+  MCALabelSubDescriptor_MCALabelDictionaryID: 'ul',
+  MCALabelSubDescriptor_MCALinkID: 'uuid',
+  MCALabelSubDescriptor_MCATagSymbol: 'utf16',
+  MCALabelSubDescriptor_MCATagName: 'utf16',
+  MCALabelSubDescriptor_MCAChannelID: 'uint32',
+  MCALabelSubDescriptor_RFC5646SpokenLanguage: 'utf8',
+  AudioChannelLabelSubDescriptor_SoundfieldGroupLinkID: 'uuid',
+  SoundfieldGroupLabelSubDescriptor_GroupOfSoundfieldGroupsLinkID: 'uuidBatch',
   GenericDataEssenceDescriptor_DataEssenceCoding: 'ul',
   TimedTextDescriptor_ResourceID: 'uuid',
   TimedTextDescriptor_UCSEncoding: 'utf16',
@@ -219,9 +227,11 @@ export function decodeMetadataValue(type, bytes) {
     case 'utf16':
       if (bytes.byteLength % 2 !== 0) throw new MetadataGraphError('UTF-16 value has an odd byte length');
       return new TextDecoder('utf-16be').decode(bytes).replace(/\0+$/u, '');
+    case 'utf8': return new TextDecoder().decode(bytes).replace(/\0+$/u, '');
     case 'timestamp': return decodeTimestamp(bytes);
     case 'version': return decodeVersion(bytes);
     case 'strongReferenceBatch': return decodeBatch(bytes, 16, (value) => formatUuid(value));
+    case 'uuidBatch': return decodeBatch(bytes, 16, (value) => formatUuid(value));
     case 'ulBatch': return decodeBatch(bytes, 16, (value) => ({
       hex: toHex(value),
       urn: `urn:smpte:ul:${formatUlHex(value)}`

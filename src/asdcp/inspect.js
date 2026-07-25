@@ -91,7 +91,7 @@ async function inspectMxfInternal(source, { signal, includeIndex }) {
     cryptographicKeyId: optionalUuidByUl(cryptographicContext, CRYPTO_ULS.cryptographicKeyId)
   } : null;
   let essence = detectEssence(headerMetadata);
-  let parsedDescriptor = parseEssenceDescriptor(headerMetadata, essence.type);
+  let parsedDescriptor = parseEssenceDescriptor(headerMetadata, essence.type, { metadataGraph });
   const trackEditRate = sourceTrackEditRate(metadataGraph);
   if (isInteropStereoscopicPicture({
     labelSetType,
@@ -104,7 +104,7 @@ async function inspectMxfInternal(source, { signal, includeIndex }) {
       type: 'jpeg-2000-stereoscopic',
       description: 'JPEG 2000 stereoscopic pictures'
     };
-    parsedDescriptor = parseEssenceDescriptor(headerMetadata, essence.type);
+    parsedDescriptor = parseEssenceDescriptor(headerMetadata, essence.type, { metadataGraph });
   }
   const descriptor = parsedDescriptor && trackEditRate
     ? { ...parsedDescriptor, editRate: trackEditRate }

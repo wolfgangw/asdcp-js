@@ -26,12 +26,49 @@ const CHANNEL_FORMATS = new Map([
   [mdd('DCAudioChannelCfg_MCA').ulHex, 6]
 ]);
 
+const MCA_CHANNEL_ROLES = new Map([
+  ['L', 'DCAudioChannel_L'],
+  ['R', 'DCAudioChannel_R'],
+  ['C', 'DCAudioChannel_C'],
+  ['LFE', 'DCAudioChannel_LFE'],
+  ['Ls', 'DCAudioChannel_Ls'],
+  ['Rs', 'DCAudioChannel_Rs'],
+  ['Lss', 'DCAudioChannel_Lss'],
+  ['Rss', 'DCAudioChannel_Rss'],
+  ['Lrs', 'DCAudioChannel_Lrs'],
+  ['Rrs', 'DCAudioChannel_Rrs'],
+  ['Lc', 'DCAudioChannel_Lc'],
+  ['Rc', 'DCAudioChannel_Rc'],
+  ['Cs', 'DCAudioChannel_Cs'],
+  ['HI', 'DCAudioChannel_HI'],
+  ['VIN', 'DCAudioChannel_VIN']
+].map(([role, name]) => [mdd(name).ulHex, role]));
+
+const PROGRAMME_CHANNEL_ROLES = new Set([
+  'L', 'R', 'C', 'LFE', 'Ls', 'Rs', 'Lss', 'Rss', 'Lrs', 'Rrs', 'Lc', 'Rc', 'Cs'
+]);
+
+const STATIC_CHANNEL_LAYOUTS = new Map([
+  [mdd('DCAudioChannelCfg_1_5p1').ulHex, {
+    name: '5.1', roles: ['L', 'R', 'C', 'LFE', 'Ls', 'Rs', 'HI', 'VIN']
+  }],
+  [mdd('DCAudioChannelCfg_2_6p1').ulHex, {
+    name: '6.1', roles: ['L', 'R', 'C', 'LFE', 'Ls', 'Rs', 'Cs', null, 'HI', 'VIN']
+  }],
+  [mdd('DCAudioChannelCfg_3_7p1').ulHex, {
+    name: '7.1 SDS', roles: ['L', 'R', 'C', 'LFE', 'Ls', 'Rs', 'Lc', 'Rc', 'HI', 'VIN']
+  }],
+  [mdd('DCAudioChannelCfg_5_7p1_DS').ulHex, {
+    name: '7.1 DS', roles: ['L', 'R', 'C', 'LFE', 'Lss', 'Rss', 'Lrs', 'Rrs', 'HI', 'VIN']
+  }]
+]);
+
 const NULL_UL = '00000000000000000000000000000000';
 const ST382_DEFAULT_PCM_UL = '060e2b340401010a0402020101000000';
 const ST382_DEFAULT_PCM_NAME = 'SMPTE-382M Default Uncompressed Sound Coding';
 
-export function parseEssenceDescriptor(headerMetadata, essenceType) {
-  if (essenceType === 'pcm') return parsePcmDescriptor(headerMetadata);
+export function parseEssenceDescriptor(headerMetadata, essenceType, { metadataGraph = null } = {}) {
+  if (essenceType === 'pcm') return parsePcmDescriptor(headerMetadata, { metadataGraph });
   if (essenceType === 'jpeg-2000' || essenceType === 'jpeg-2000-stereoscopic') {
     return parseJpeg2000Descriptor(headerMetadata, { stereoscopic: essenceType.endsWith('stereoscopic') });
   }
@@ -42,7 +79,7 @@ export function parseEssenceDescriptor(headerMetadata, essenceType) {
   return null;
 }
 
-export function parsePcmDescriptor(headerMetadata) {
+export function parsePcmDescriptor(headerMetadata, { metadataGraph = null } = {}) {
   const descriptor = requireSet(headerMetadata, KEYS.waveAudio, 'WaveAudioDescriptor');
   const channelAssignment = optionalValue(descriptor, 'WaveAudioDescriptor_ChannelAssignment');
   const channelAssignmentUl = channelAssignment ? toHex(channelAssignment) : null;
@@ -56,12 +93,19 @@ export function parsePcmDescriptor(headerMetadata) {
       message: 'SoundEssenceCoding is a stored null UL; ST 382 default PCM should omit this optional property'
     });
   }
+  const channelCount = readUint32(value(descriptor, 'GenericSoundEssenceDescriptor_ChannelCount'));
+  const channelMetadata = resolvePcmChannelMetadata({
+    channelCount,
+    channelAssignmentUl,
+    metadataGraph
+  });
+  issues.push(...channelMetadata.issues);
   return {
     type: 'pcm',
     editRate: readRational(value(descriptor, 'FileDescriptor_SampleRate')),
     audioSamplingRate: readRational(value(descriptor, 'GenericSoundEssenceDescriptor_AudioSamplingRate')),
     locked: readUint8(optionalValue(descriptor, 'GenericSoundEssenceDescriptor_Locked') ?? Uint8Array.of(0)),
-    channelCount: readUint32(value(descriptor, 'GenericSoundEssenceDescriptor_ChannelCount')),
+    channelCount,
     quantizationBits: readUint32(value(descriptor, 'GenericSoundEssenceDescriptor_QuantizationBits')),
     blockAlign: readUint16(value(descriptor, 'WaveAudioDescriptor_BlockAlign')),
     averageBytesPerSecond: readUint32(value(descriptor, 'WaveAudioDescriptor_AvgBps')),
@@ -78,7 +122,157 @@ export function parsePcmDescriptor(headerMetadata) {
     },
     channelAssignmentUl,
     channelFormat: CHANNEL_FORMATS.get(channelAssignmentUl) ?? 0,
+    channelLayout: channelMetadata.channelLayout,
+    audioChannels: channelMetadata.audioChannels,
+    mcaLabels: channelMetadata.mcaLabels,
     issues
+  };
+}
+
+function resolvePcmChannelMetadata({ channelCount, channelAssignmentUl, metadataGraph }) {
+  const issues = [];
+  const mcaLabels = parseMcaLabels(metadataGraph);
+  if (mcaLabels.audioChannels.length > 0) {
+    const byChannelId = new Map();
+    for (const label of mcaLabels.audioChannels) {
+      if (!Number.isInteger(label.channelId) || label.channelId < 1 || label.channelId > channelCount) {
+        issues.push({
+          code: 'mxf.pcm.mca-channel-id-out-of-range',
+          message: `MCA channel ID ${label.channelId ?? '[missing]'} is outside the ${channelCount}-channel essence`
+        });
+        continue;
+      }
+      if (byChannelId.has(label.channelId)) {
+        issues.push({
+          code: 'mxf.pcm.mca-channel-id-duplicate',
+          message: `MCA channel ID ${label.channelId} is assigned more than once`
+        });
+        continue;
+      }
+      byChannelId.set(label.channelId, label);
+    }
+    return {
+      audioChannels: Array.from({ length: channelCount }, (_, index) => {
+        const label = byChannelId.get(index + 1);
+        return label
+          ? normalizedChannel(index, label.role, 'mca', label)
+          : normalizedChannel(index, null, 'mca');
+      }),
+      channelLayout: {
+        source: 'mca',
+        name: mcaLabels.soundfieldGroups.map((group) => group.symbol).filter(Boolean).join(' + ') || 'MCA',
+        resolved: byChannelId.size > 0
+      },
+      mcaLabels,
+      issues
+    };
+  }
+
+  const staticLayout = STATIC_CHANNEL_LAYOUTS.get(channelAssignmentUl);
+  if (staticLayout) {
+    return {
+      audioChannels: Array.from({ length: channelCount }, (_, index) => (
+        normalizedChannel(index, staticLayout.roles[index] ?? null, 'channel-assignment')
+      )),
+      channelLayout: { source: 'channel-assignment', name: staticLayout.name, resolved: true },
+      mcaLabels,
+      issues
+    };
+  }
+
+  if (channelAssignmentUl === null) {
+    const defaultLayout = STATIC_CHANNEL_LAYOUTS.get(mdd('DCAudioChannelCfg_1_5p1').ulHex);
+    return {
+      audioChannels: Array.from({ length: channelCount }, (_, index) => (
+        normalizedChannel(index, defaultLayout.roles[index] ?? null, 'st429-2-default')
+      )),
+      channelLayout: { source: 'st429-2-default', name: defaultLayout.name, resolved: true },
+      mcaLabels,
+      issues
+    };
+  }
+
+  const inferredRoles = channelCount === 2
+    ? ['L', 'R']
+    : channelCount === 6 ? ['L', 'R', 'C', 'LFE', 'Ls', 'Rs'] : null;
+  if (inferredRoles) {
+    issues.push({
+      code: 'mxf.pcm.channel-layout-inferred',
+      message: `PCM channel roles were inferred from the ${channelCount}-channel count because MCA labels are absent`
+    });
+    return {
+      audioChannels: inferredRoles.map((role, index) => normalizedChannel(index, role, 'channel-count-inference')),
+      channelLayout: {
+        source: 'channel-count-inference',
+        name: channelCount === 2 ? '2.0' : '5.1',
+        resolved: true
+      },
+      mcaLabels,
+      issues
+    };
+  }
+
+  return {
+    audioChannels: Array.from({ length: channelCount }, (_, index) => normalizedChannel(index, null, 'unknown')),
+    channelLayout: { source: 'unknown', name: null, resolved: false },
+    mcaLabels,
+    issues
+  };
+}
+
+function parseMcaLabels(metadataGraph) {
+  if (!metadataGraph) return { soundfieldGroups: [], audioChannels: [] };
+  const waveDescriptor = metadataGraph.objects.find((object) => object.keyHex === KEYS.waveAudio);
+  if (!waveDescriptor) return { soundfieldGroups: [], audioChannels: [] };
+  const subDescriptors = waveDescriptor.references
+    .map((reference) => reference.target)
+    .filter(Boolean);
+  const soundfieldGroups = subDescriptors
+    .filter((object) => object.type === 'SoundfieldGroupLabelSubDescriptor')
+    .map((object) => mcaLabel(object));
+  const audioChannels = subDescriptors
+    .filter((object) => object.type === 'AudioChannelLabelSubDescriptor')
+    .map((object) => {
+      const label = mcaLabel(object);
+      return {
+        ...label,
+        channelId: propertyValue(object, 'MCALabelSubDescriptor_MCAChannelID'),
+        soundfieldGroupLinkId: propertyValue(object, 'AudioChannelLabelSubDescriptor_SoundfieldGroupLinkID')
+      };
+    });
+  return { soundfieldGroups, audioChannels };
+}
+
+function mcaLabel(object) {
+  const dictionary = propertyValue(object, 'MCALabelSubDescriptor_MCALabelDictionaryID');
+  const dictionaryIdUl = dictionary?.hex ?? null;
+  return {
+    dictionaryIdUl,
+    linkId: propertyValue(object, 'MCALabelSubDescriptor_MCALinkID'),
+    symbol: propertyValue(object, 'MCALabelSubDescriptor_MCATagSymbol'),
+    name: propertyValue(object, 'MCALabelSubDescriptor_MCATagName'),
+    language: propertyValue(object, 'MCALabelSubDescriptor_RFC5646SpokenLanguage'),
+    role: MCA_CHANNEL_ROLES.get(dictionaryIdUl) ?? null
+  };
+}
+
+function propertyValue(object, name) {
+  return object.properties[name]?.value ?? null;
+}
+
+function normalizedChannel(index, role, source, label = {}) {
+  return {
+    index,
+    channelId: index + 1,
+    role,
+    symbol: label.symbol ?? role ?? `CH${String(index + 1).padStart(2, '0')}`,
+    name: label.name ?? null,
+    dictionaryIdUl: label.dictionaryIdUl ?? null,
+    linkId: label.linkId ?? null,
+    soundfieldGroupLinkId: label.soundfieldGroupLinkId ?? null,
+    language: label.language ?? null,
+    programme: PROGRAMME_CHANNEL_ROLES.has(role),
+    source
   };
 }
 
