@@ -170,6 +170,41 @@ test('JPEG 2000 descriptor accepts an omitted optional quantization replica', ()
   assert.equal(descriptor.componentCount, 3);
 });
 
+test('JPEG 2000 descriptor accepts omitted optional coding-style and quantization replicas', () => {
+  const header = metadata([
+    set('RGBAEssenceDescriptor', {
+      FileDescriptor_SampleRate: rational(24, 1),
+      FileDescriptor_ContainerDuration: i64(24n),
+      GenericPictureEssenceDescriptor_StoredWidth: u32(1998),
+      GenericPictureEssenceDescriptor_StoredHeight: u32(1080),
+      GenericPictureEssenceDescriptor_AspectRatio: rational(1998, 1080),
+      GenericPictureEssenceDescriptor_PictureEssenceCoding: ul(0x03)
+    }),
+    set('JPEG2000PictureSubDescriptor', {
+      JPEG2000PictureSubDescriptor_Rsize: u16(3),
+      JPEG2000PictureSubDescriptor_Xsize: u32(1998),
+      JPEG2000PictureSubDescriptor_Ysize: u32(1080),
+      JPEG2000PictureSubDescriptor_XOsize: u32(0),
+      JPEG2000PictureSubDescriptor_YOsize: u32(0),
+      JPEG2000PictureSubDescriptor_XTsize: u32(1998),
+      JPEG2000PictureSubDescriptor_YTsize: u32(1080),
+      JPEG2000PictureSubDescriptor_XTOsize: u32(0),
+      JPEG2000PictureSubDescriptor_YTOsize: u32(0),
+      JPEG2000PictureSubDescriptor_Csize: u16(3),
+      JPEG2000PictureSubDescriptor_PictureComponentSizing: Uint8Array.of(
+        0, 0, 0, 3, 0, 0, 0, 3,
+        11, 1, 1, 11, 1, 1, 11, 1, 1
+      )
+    })
+  ]);
+
+  const descriptor = parseJpeg2000Descriptor(header);
+  assert.equal(descriptor.codingStyle, null);
+  assert.equal(descriptor.quantization, null);
+  assert.equal(descriptor.storedWidth, 1998);
+  assert.equal(descriptor.componentCount, 3);
+});
+
 test('timed-text descriptor aggregates ancillary resources', () => {
   const asset = uuid(1);
   const resource = uuid(2);

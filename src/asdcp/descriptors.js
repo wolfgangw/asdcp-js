@@ -281,7 +281,7 @@ export function parseJpeg2000Descriptor(headerMetadata, { stereoscopic = false }
   if (!descriptor) throw new DescriptorError('MXF has no JPEG 2000 primary picture descriptor');
   const subDescriptor = requireSet(headerMetadata, KEYS.jpeg2000, 'JPEG2000PictureSubDescriptor');
   const componentSizing = readComponentSizing(value(subDescriptor, 'JPEG2000PictureSubDescriptor_PictureComponentSizing'));
-  const codingStyle = readCodingStyle(value(subDescriptor, 'JPEG2000PictureSubDescriptor_CodingStyleDefault'));
+  const codingStyleBytes = optionalValue(subDescriptor, 'JPEG2000PictureSubDescriptor_CodingStyleDefault');
   const quantizationBytes = optionalValue(subDescriptor, 'JPEG2000PictureSubDescriptor_QuantizationDefault');
   const pictureEssenceCoding = value(descriptor, 'GenericPictureEssenceDescriptor_PictureEssenceCoding');
   const extendedCapabilities = optionalValue(
@@ -309,7 +309,7 @@ export function parseJpeg2000Descriptor(headerMetadata, { stereoscopic = false }
     componentCount: readUint16(value(subDescriptor, 'JPEG2000PictureSubDescriptor_Csize')),
     containerDuration: readInt64(value(descriptor, 'FileDescriptor_ContainerDuration')),
     components: componentSizing,
-    codingStyle,
+    codingStyle: codingStyleBytes ? readCodingStyle(codingStyleBytes) : null,
     quantization: quantizationBytes
       ? { sqcd: quantizationBytes[0], spqcdHex: toHex(quantizationBytes.subarray(1)) }
       : null,
