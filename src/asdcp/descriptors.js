@@ -63,6 +63,8 @@ const STATIC_CHANNEL_LAYOUTS = new Map([
   }]
 ]);
 
+const WILD_TRACK_FORMAT_UL = mdd('DCAudioChannelCfg_4_WTF').ulHex;
+
 const NULL_UL = '00000000000000000000000000000000';
 const ST382_DEFAULT_PCM_UL = '060e2b340401010a0402020101000000';
 const ST382_DEFAULT_PCM_NAME = 'SMPTE-382M Default Uncompressed Sound Coding';
@@ -192,20 +194,15 @@ function resolvePcmChannelMetadata({ channelCount, channelAssignmentUl, metadata
     };
   }
 
-  const inferredRoles = channelCount === 2
-    ? ['L', 'R']
-    : channelCount === 6 ? ['L', 'R', 'C', 'LFE', 'Ls', 'Rs'] : null;
-  if (inferredRoles) {
-    issues.push({
-      code: 'mxf.pcm.channel-layout-inferred',
-      message: `PCM channel roles were inferred from the ${channelCount}-channel count because MCA labels are absent`
-    });
+  if (channelAssignmentUl === WILD_TRACK_FORMAT_UL) {
     return {
-      audioChannels: inferredRoles.map((role, index) => normalizedChannel(index, role, 'channel-count-inference')),
+      audioChannels: Array.from({ length: channelCount }, (_, index) => (
+        normalizedChannel(index, null, 'wild-track-format')
+      )),
       channelLayout: {
-        source: 'channel-count-inference',
-        name: channelCount === 2 ? '2.0' : '5.1',
-        resolved: true
+        source: 'channel-assignment',
+        name: 'Wild Track Format',
+        resolved: false
       },
       mcaLabels,
       issues

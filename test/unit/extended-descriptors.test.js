@@ -91,6 +91,37 @@ test('PCM descriptor exposes the fixed 7.1 SDS channel assignment', () => {
   assert.equal(descriptor.channelLayout.name, '7.1 SDS');
 });
 
+test('PCM descriptor identifies Wild Track Format without inventing channel roles', () => {
+  const header = metadata([set('WaveAudioDescriptor', {
+    FileDescriptor_SampleRate: rational(24, 1),
+    GenericSoundEssenceDescriptor_AudioSamplingRate: rational(48_000, 1),
+    GenericSoundEssenceDescriptor_ChannelCount: u32(8),
+    GenericSoundEssenceDescriptor_QuantizationBits: u32(24),
+    WaveAudioDescriptor_BlockAlign: u16(24),
+    WaveAudioDescriptor_AvgBps: u32(1_152_000),
+    FileDescriptor_ContainerDuration: i64(240n),
+    FileDescriptor_EssenceContainer: ul(0x01),
+    WaveAudioDescriptor_ChannelAssignment: namedUl('DCAudioChannelCfg_4_WTF')
+  })]);
+
+  const descriptor = parsePcmDescriptor(header);
+  assert.equal(descriptor.channelFormat, 4);
+  assert.deepEqual(descriptor.channelLayout, {
+    source: 'channel-assignment',
+    name: 'Wild Track Format',
+    resolved: false
+  });
+  assert.deepEqual(descriptor.audioChannels.map(({ role, symbol, programme, source }) => ({
+    role, symbol, programme, source
+  })), Array.from({ length: 8 }, (_, index) => ({
+    role: null,
+    symbol: `CH${String(index + 1).padStart(2, '0')}`,
+    programme: false,
+    source: 'wild-track-format'
+  })));
+  assert.deepEqual(descriptor.issues, []);
+});
+
 test('MPEG-2 descriptor decodes CDCI and coding properties', () => {
   const header = metadata([
     set('MPEG2VideoDescriptor', {
