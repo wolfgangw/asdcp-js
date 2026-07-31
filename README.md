@@ -4,7 +4,7 @@ Native ECMAScript module for inspecting and reading AS-DCP MXF track files in
 contemporary browsers and Node.
 
 The API implements the AS-DCP functionality required for parity with
-`asdcp-info` and `asdcp-unwrap`. It does not implement AS-02.
+[AS-DCP Lib](https://github.com/cinecert/asdcplib)'s `asdcp-info` and `asdcp-unwrap`. It does not implement AS-02.
 
 ## Usage
 
