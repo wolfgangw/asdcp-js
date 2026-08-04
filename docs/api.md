@@ -65,6 +65,7 @@ interface EssenceSummary {
     | 'timed-text'
     | 'd-cinema-generic-data'
     | 'dolby-atmos'
+    | 'iab'
     | 'unknown';
   description: string;
   editUnitCount: bigint | null;
@@ -257,10 +258,19 @@ interface MetadataReference {
 | `jpeg-2000`, `jpeg-2000-stereoscopic` | `stereoscopic`, `aspectRatio`, `editRate`, `sampleRate`, `storedWidth`, `storedHeight`, `rsize`, `xsize`, `ysize`, `xOrigin`, `yOrigin`, `tileWidth`, `tileHeight`, `tileXOrigin`, `tileYOrigin`, `componentCount`, `containerDuration`, `components`, `codingStyle`, `quantization`, `extendedCapabilities`, `pictureEssenceCodingUl` |
 | `mpeg-2` | `sampleRate`, `frameLayout`, `storedWidth`, `storedHeight`, `aspectRatio`, `pictureEssenceCodingUl`, `componentDepth`, `horizontalSubsampling`, `verticalSubsampling`, `colorSiting`, `codedContentType`, `lowDelay`, `bitRate`, `profileAndLevel`, `containerDuration` |
 | `timed-text` | `editRate`, `containerDuration`, `assetId`, `ucsEncoding`, `namespaceName`, `rfc5646LanguageTagList`, `dataEssenceCodingUl`, `displayType`, `intrinsicPictureResolution`, `zPositionInUse`, `resources` |
-| `d-cinema-generic-data` | `editRate`, `containerDuration`, `dataEssenceCodingUl` |
-| `dolby-atmos` | Generic-data fields plus `atmosVersion`, `maxChannelCount`, `maxObjectCount`, `atmosId`, `firstFrame` |
+| `d-cinema-generic-data` | `editRate`, `linkedTrackId`, `containerDuration`, `essenceContainerUl`, `dataEssenceCodingUl` |
+| `dolby-atmos` | ST 429-18 D-Cinema immersive audio: generic-data fields plus `family`, `standard`, `wrapping`, `descriptorSet`, `subDescriptorSet`, `immersiveAudioVersion`, `maxChannelCount`, `maxObjectCount`, `immersiveAudioId`, `firstFrame`, `iabSampleRate`; historical `atmosVersion` and `atmosId` aliases remain available |
+| `iab` | ST 2067-201 IAB: `family`, `standard`, `wrapping`, descriptor/subdescriptor set names, edit/sample rates, sound descriptor values, `conformsToSpecifications`, and typed `soundfield` MCA metadata |
 
 Timed-text resources have `{ resourceId, mediaType, essenceStreamId }`.
+
+All ST 429-18 immersive-audio subdescriptor properties are optional and are
+returned as `null` when absent. `dolby-atmos` is retained as the public
+discriminator because it is the historical AS-DCP name for the stored
+`DolbyAtmosSubDescriptor`; use `family === 'immersive-audio'` for
+standards-neutral application logic. The D-Cinema wrapper and its
+`ImmersiveAudioCoding` UL do not by themselves prove whether the bitstream is a
+legacy Dolby Atmos stream or an IAB-profile stream.
 
 ### Footer index
 

@@ -1,6 +1,6 @@
 {
   "name": "asdcp-js",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "JavaScript file access for AS-DCP MXF track files",
   "license": "BSD-3-Clause",
   "type": "module",

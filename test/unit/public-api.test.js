@@ -27,7 +27,11 @@ import {
   writeUnwrappedFilesToDirectory
 } from '../../src/browser.js';
 import { NodeFileRandomAccessSource } from '../../src/node.js';
-import { openMxfStructure, readKlvHeader } from '../../src/mxf.js';
+import {
+  openMxfStructure,
+  parseIabDescriptor,
+  readKlvHeader
+} from '../../src/mxf.js';
 
 test('documented package entry points expose the supported API', () => {
   for (const value of [
@@ -42,6 +46,7 @@ test('documented package entry points expose the supported API', () => {
     MemoryRandomAccessSource,
     NodeFileRandomAccessSource,
     openMxfStructure,
+    parseIabDescriptor,
     openTrack,
     OutputSinkError,
     readKlvHeader,

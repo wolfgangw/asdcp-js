@@ -4,7 +4,16 @@ Native ECMAScript module for inspecting and reading AS-DCP MXF track files in
 contemporary browsers and Node.
 
 The API implements the AS-DCP functionality required for parity with
-[AS-DCP Lib](https://github.com/cinecert/asdcplib)'s `asdcp-info` and `asdcp-unwrap`. It does not implement AS-02.
+[AS-DCP Lib](https://github.com/cinecert/asdcplib)'s `asdcp-info` and
+`asdcp-unwrap`. Inspection also recognizes the typed ST 2067-201 IAB descriptor
+and soundfield metadata used by IMF/AS-02 files; the track reader remains scoped
+to AS-DCP essence.
+
+D-Cinema immersive-audio track files are reported from their stored ST 429-18
+metadata. The historical AS-DCP discriminator `dolby-atmos` remains stable for
+compatibility, while `essence.family` and `descriptor.family` identify the
+standards-neutral `immersive-audio` family. This matters because the ST 429-18
+MXF wrapper alone cannot distinguish legacy Dolby Atmos from standardized IAB.
 
 ## Usage
 

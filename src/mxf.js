@@ -38,6 +38,7 @@ export {
   parseAtmosDescriptor,
   parseEssenceDescriptor,
   parseGenericDataDescriptor,
+  parseIabDescriptor,
   parseJpeg2000Descriptor,
   parseMpeg2Descriptor,
   parsePcmDescriptor,

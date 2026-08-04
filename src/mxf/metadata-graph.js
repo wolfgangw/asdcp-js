@@ -98,6 +98,8 @@ const TYPES = new Map(Object.entries({
   GenericSoundEssenceDescriptor_ChannelCount: 'uint32',
   GenericSoundEssenceDescriptor_QuantizationBits: 'uint32',
   GenericSoundEssenceDescriptor_SoundEssenceCoding: 'ul',
+  GenericSoundEssenceDescriptor_ReferenceImageEditRate: 'rational',
+  GenericSoundEssenceDescriptor_ReferenceAudioAlignmentLevel: 'uint8',
   WaveAudioDescriptor_BlockAlign: 'uint16',
   WaveAudioDescriptor_AvgBps: 'uint32',
   WaveAudioDescriptor_SequenceOffset: 'uint8',
@@ -108,6 +110,11 @@ const TYPES = new Map(Object.entries({
   MCALabelSubDescriptor_MCATagName: 'utf16',
   MCALabelSubDescriptor_MCAChannelID: 'uint32',
   MCALabelSubDescriptor_RFC5646SpokenLanguage: 'utf8',
+  MCALabelSubDescriptor_MCATitle: 'utf16',
+  MCALabelSubDescriptor_MCATitleVersion: 'utf16',
+  MCALabelSubDescriptor_MCATitleSubVersion: 'utf16',
+  MCALabelSubDescriptor_MCAAudioContentKind: 'utf16',
+  MCALabelSubDescriptor_MCAAudioElementKind: 'utf16',
   AudioChannelLabelSubDescriptor_SoundfieldGroupLinkID: 'uuid',
   SoundfieldGroupLabelSubDescriptor_GroupOfSoundfieldGroupsLinkID: 'uuidBatch',
   GenericDataEssenceDescriptor_DataEssenceCoding: 'ul',
@@ -126,6 +133,7 @@ const TYPES = new Map(Object.entries({
   DolbyAtmosSubDescriptor_MaxObjectCount: 'uint16',
   DolbyAtmosSubDescriptor_AtmosID: 'uuid',
   DolbyAtmosSubDescriptor_FirstFrame: 'uint32',
+  Preface_ConformsToSpecifications: 'ulBatch',
   JPEG2000PictureSubDescriptor_Rsize: 'uint16',
   JPEG2000PictureSubDescriptor_Xsize: 'uint32',
   JPEG2000PictureSubDescriptor_Ysize: 'uint32',
@@ -141,6 +149,13 @@ const TYPES = new Map(Object.entries({
   JPEG2000PictureSubDescriptor_QuantizationDefault: 'raw',
   JPEG2000PictureSubDescriptor_J2KExtendedCapabilities: 'j2kExtendedCapabilities'
 }));
+
+const SUPPLEMENTAL_PROPERTIES = new Map([
+  ['060e2b340101010e040203010f000000', {
+    name: 'ImmersiveAudioDataEssenceSubDescriptor_IABSampleRate',
+    type: 'rational'
+  }]
+]);
 
 const REFERENCE_TYPES = new Set(['strongReference', 'strongReferenceBatch']);
 
@@ -254,8 +269,10 @@ function decodeJ2kExtendedCapabilities(bytes) {
 }
 
 function decodeProperty(item, packet, issues) {
-  const name = item.dictionaryEntry?.name ?? `Unknown_0x${item.tag.toString(16).padStart(4, '0')}`;
-  const type = TYPES.get(name) ?? 'raw';
+  const supplemental = item.ulHex ? SUPPLEMENTAL_PROPERTIES.get(item.ulHex) : null;
+  const name = item.dictionaryEntry?.name ?? supplemental?.name ??
+    `Unknown_0x${item.tag.toString(16).padStart(4, '0')}`;
+  const type = supplemental?.type ?? TYPES.get(name) ?? 'raw';
   try {
     return { name, type, value: decodeMetadataValue(type, item.value), item };
   } catch (error) {

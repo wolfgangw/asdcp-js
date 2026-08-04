@@ -5,6 +5,7 @@ import test from 'node:test';
 import {
   parseAtmosDescriptor,
   parseGenericDataDescriptor,
+  parseIabDescriptor,
   parseJpeg2000Descriptor,
   parseMpeg2Descriptor,
   parsePcmDescriptor,
@@ -270,32 +271,133 @@ test('timed-text descriptor aggregates ancillary resources', () => {
 
 test('generic data and Atmos descriptors remain distinct', () => {
   const coding = Uint8Array.of(0x06, 0x0e, 0x2b, 0x34, 4, 1, 1, 5, 0x0e, 9, 6, 4, 0, 0, 0, 0);
+  const atmos = set('DolbyAtmosSubDescriptor', {
+    DolbyAtmosSubDescriptor_AtmosVersion: u8(1),
+    DolbyAtmosSubDescriptor_MaxChannelCount: u16(128),
+    DolbyAtmosSubDescriptor_MaxObjectCount: u16(118),
+    DolbyAtmosSubDescriptor_AtmosID: uuid(3),
+    DolbyAtmosSubDescriptor_FirstFrame: u32(12)
+  });
+  addUlItem(atmos, '060e2b340101010e040203010f000000', rational(48_000, 1));
   const header = metadata([
     set('PrivateDCDataDescriptor', {
       FileDescriptor_SampleRate: rational(24, 1),
+      FileDescriptor_LinkedTrackID: u32(2),
       FileDescriptor_ContainerDuration: i64(48n),
+      FileDescriptor_EssenceContainer: namedUl('PrivateDCDataWrappingFrame'),
       GenericDataEssenceDescriptor_DataEssenceCoding: coding
     }),
-    set('DolbyAtmosSubDescriptor', {
-      DolbyAtmosSubDescriptor_AtmosVersion: u8(1),
-      DolbyAtmosSubDescriptor_MaxChannelCount: u16(128),
-      DolbyAtmosSubDescriptor_MaxObjectCount: u16(118),
-      DolbyAtmosSubDescriptor_AtmosID: uuid(3),
-      DolbyAtmosSubDescriptor_FirstFrame: u32(12)
-    })
+    atmos
   ]);
 
   assert.equal(parseGenericDataDescriptor(header).type, 'd-cinema-generic-data');
   assert.deepEqual(parseAtmosDescriptor(header), {
     type: 'dolby-atmos',
     editRate: { numerator: 24, denominator: 1 },
+    linkedTrackId: 2,
     containerDuration: 48n,
+    essenceContainerUl: mdd('PrivateDCDataWrappingFrame').ulHex,
     dataEssenceCodingUl: '060e2b34040101050e09060400000000',
+    family: 'immersive-audio',
+    standard: 'SMPTE ST 429-18',
+    wrapping: 'frame',
+    descriptorSet: 'PrivateDCDataDescriptor',
+    subDescriptorSet: 'DolbyAtmosSubDescriptor',
+    immersiveAudioVersion: 1,
+    immersiveAudioId: '03030303-0303-0303-0303-030303030303',
     atmosVersion: 1,
     maxChannelCount: 128,
     maxObjectCount: 118,
     atmosId: '03030303-0303-0303-0303-030303030303',
-    firstFrame: 12
+    firstFrame: 12,
+    iabSampleRate: { numerator: 48_000, denominator: 1 }
+  });
+  const graph = buildMetadataGraph(header);
+  assert.deepEqual(
+    graph.objects.find(({ type }) => type === 'DolbyAtmosSubDescriptor')
+      .properties.ImmersiveAudioDataEssenceSubDescriptor_IABSampleRate.value,
+    { numerator: 48_000, denominator: 1 }
+  );
+});
+
+test('ST 429-18 immersive-audio metadata remains readable when optional fields are absent', () => {
+  const descriptor = parseAtmosDescriptor(metadata([
+    set('PrivateDCDataDescriptor', {
+      FileDescriptor_SampleRate: rational(24, 1),
+      FileDescriptor_ContainerDuration: i64(48n),
+      GenericDataEssenceDescriptor_DataEssenceCoding: namedUl('ImmersiveAudioCoding')
+    }),
+    set('DolbyAtmosSubDescriptor', {})
+  ]));
+
+  assert.equal(descriptor.immersiveAudioVersion, null);
+  assert.equal(descriptor.maxChannelCount, null);
+  assert.equal(descriptor.maxObjectCount, null);
+  assert.equal(descriptor.immersiveAudioId, null);
+  assert.equal(descriptor.firstFrame, null);
+  assert.equal(descriptor.iabSampleRate, null);
+});
+
+test('ST 2067-201 IAB descriptors expose sound and soundfield metadata', () => {
+  const conforms = namedUl('IMF_IABTrackFileLevel0');
+  const header = metadata([
+    set('Preface', {
+      Preface_ConformsToSpecifications: ulBatch([conforms])
+    }),
+    set('IABEssenceDescriptor', {
+      FileDescriptor_SampleRate: rational(24, 1),
+      FileDescriptor_LinkedTrackID: u32(2),
+      FileDescriptor_ContainerDuration: i64(240n),
+      FileDescriptor_EssenceContainer: namedUl('IMF_IABEssenceClipWrappedContainer'),
+      GenericSoundEssenceDescriptor_AudioSamplingRate: rational(48_000, 1),
+      GenericSoundEssenceDescriptor_ChannelCount: u32(0),
+      GenericSoundEssenceDescriptor_QuantizationBits: u32(24),
+      GenericSoundEssenceDescriptor_SoundEssenceCoding: namedUl('ImmersiveAudioCoding'),
+      GenericSoundEssenceDescriptor_ReferenceImageEditRate: rational(24, 1),
+      GenericSoundEssenceDescriptor_ReferenceAudioAlignmentLevel: u8(4)
+    }),
+    set('IABSoundfieldLabelSubDescriptor', {
+      MCALabelSubDescriptor_MCALabelDictionaryID: namedUl('IABSoundfield'),
+      MCALabelSubDescriptor_MCALinkID: uuid(4),
+      MCALabelSubDescriptor_MCATagSymbol: utf16('IAB'),
+      MCALabelSubDescriptor_MCATagName: utf16('IAB'),
+      MCALabelSubDescriptor_RFC5646SpokenLanguage: ascii('en'),
+      MCALabelSubDescriptor_MCAAudioContentKind: utf16('PRM'),
+      MCALabelSubDescriptor_MCAAudioElementKind: utf16('FCMP'),
+      MCALabelSubDescriptor_MCATitle: utf16('Feature'),
+      MCALabelSubDescriptor_MCATitleVersion: utf16('OV')
+    })
+  ]);
+
+  assert.deepEqual(parseIabDescriptor(header), {
+    type: 'iab',
+    family: 'immersive-audio',
+    standard: 'SMPTE ST 2067-201',
+    wrapping: 'clip',
+    descriptorSet: 'IABEssenceDescriptor',
+    subDescriptorSet: 'IABSoundfieldLabelSubDescriptor',
+    editRate: { numerator: 24, denominator: 1 },
+    linkedTrackId: 2,
+    containerDuration: 240n,
+    essenceContainerUl: mdd('IMF_IABEssenceClipWrappedContainer').ulHex,
+    audioSamplingRate: { numerator: 48_000, denominator: 1 },
+    channelCount: 0,
+    quantizationBits: 24,
+    soundEssenceCodingUl: mdd('ImmersiveAudioCoding').ulHex,
+    referenceImageEditRate: { numerator: 24, denominator: 1 },
+    referenceAudioAlignmentLevel: 4,
+    conformsToSpecifications: [mdd('IMF_IABTrackFileLevel0').ulHex],
+    soundfield: {
+      dictionaryIdUl: mdd('IABSoundfield').ulHex,
+      linkId: '04040404-0404-0404-0404-040404040404',
+      tagSymbol: 'IAB',
+      tagName: 'IAB',
+      spokenLanguage: 'en',
+      audioContentKind: 'PRM',
+      audioElementKind: 'FCMP',
+      title: 'Feature',
+      titleVersion: 'OV'
+    }
   });
 });
 
@@ -318,6 +420,13 @@ function set(type, properties) {
       byUl: new Map(items.map((item) => [item.ulHex, item]))
     }
   };
+}
+
+function addUlItem(packet, ulHex, bytes) {
+  const item = { tag: 0xfff0, ulHex, dictionaryEntry: null, value: bytes };
+  packet.localSet.items.push(item);
+  packet.localSet.byTag.set(item.tag, item);
+  packet.localSet.byUl.set(item.ulHex, item);
 }
 
 function u8(value) {
@@ -364,6 +473,14 @@ function uuid(byte) {
 }
 
 function uuidBatch(values) {
+  return Uint8Array.of(
+    0, 0, 0, values.length,
+    0, 0, 0, 16,
+    ...values.flatMap((value) => Array.from(value))
+  );
+}
+
+function ulBatch(values) {
   return Uint8Array.of(
     0, 0, 0, values.length,
     0, 0, 0, 16,

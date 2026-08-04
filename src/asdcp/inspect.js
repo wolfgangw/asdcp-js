@@ -14,7 +14,8 @@ const KEYS = {
   sourcePackage: mdd('SourcePackage').ulHex,
   cryptographicContext: mdd('CryptographicContext').ulHex,
   interopOpAtom: mdd('MXFInterop_OPAtom').ulHex,
-  smpteOpAtom: mdd('OPAtom').ulHex
+  smpteOpAtom: mdd('OPAtom').ulHex,
+  smpteOp1a: mdd('OP1a').ulHex
 };
 
 const DESCRIPTOR_KEYS = {
@@ -26,6 +27,7 @@ const DESCRIPTOR_KEYS = {
   dcData: mdd('DCDataDescriptor').ulHex,
   privateDcData: mdd('PrivateDCDataDescriptor').ulHex,
   dolbyAtmos: mdd('DolbyAtmosSubDescriptor').ulHex,
+  iab: mdd('IABEssenceDescriptor').ulHex,
   cdci: mdd('CDCIEssenceDescriptor').ulHex,
   rgba: mdd('RGBAEssenceDescriptor').ulHex
 };
@@ -81,7 +83,7 @@ async function inspectMxfInternal(source, { signal, includeIndex }) {
   if (packageUid.byteLength !== 32) throw new Error('SourcePackage PackageUID is not a 32-byte UMID');
 
   const operationalPattern = toHex(structure.headerPartition.operationalPattern);
-  const labelSetType = operationalPattern === KEYS.smpteOpAtom
+  const labelSetType = operationalPattern === KEYS.smpteOpAtom || operationalPattern === KEYS.smpteOp1a
     ? 'SMPTE'
     : operationalPattern === KEYS.interopOpAtom ? 'MXF Interop' : 'Unknown';
 
@@ -189,10 +191,14 @@ function detectEssence(headerMetadata) {
     type = 'timed-text';
     description = 'Timed Text';
     descriptor = sets.get(DESCRIPTOR_KEYS.timedText);
+  } else if (sets.has(DESCRIPTOR_KEYS.iab)) {
+    type = 'iab';
+    description = 'IAB audio';
+    descriptor = sets.get(DESCRIPTOR_KEYS.iab);
   } else if (sets.has(DESCRIPTOR_KEYS.dcData) || sets.has(DESCRIPTOR_KEYS.privateDcData)) {
     const atmos = sets.has(DESCRIPTOR_KEYS.dolbyAtmos);
     type = atmos ? 'dolby-atmos' : 'd-cinema-generic-data';
-    description = atmos ? 'Dolby ATMOS' : 'D-Cinema Generic Data';
+    description = atmos ? 'D-Cinema immersive audio (IAB / Dolby Atmos)' : 'D-Cinema Generic Data';
     descriptor = sets.get(DESCRIPTOR_KEYS.dcData) ?? sets.get(DESCRIPTOR_KEYS.privateDcData);
   } else {
     return { type: 'unknown', description: 'Unknown', editUnitCount: null };
@@ -202,7 +208,15 @@ function detectEssence(headerMetadata) {
   return {
     type,
     description,
-    editUnitCount: duration ? readInt64(duration, 'ContainerDuration') : null
+    editUnitCount: duration ? readInt64(duration, 'ContainerDuration') : null,
+    ...(type === 'dolby-atmos' ? {
+      family: 'immersive-audio',
+      standard: 'SMPTE ST 429-18'
+    } : {}),
+    ...(type === 'iab' ? {
+      family: 'immersive-audio',
+      standard: 'SMPTE ST 2067-201'
+    } : {})
   };
 }
 

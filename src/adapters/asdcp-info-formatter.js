@@ -17,10 +17,11 @@ export function formatAsdcpInfo(inspected, {
   if (count === null) throw new Error('MXF descriptor has no ContainerDuration');
 
   const prefix = writerInfo.labelSetType === 'SMPTE'
-    ? 'SMPTE 429'
+    ? essence.type === 'iab' ? 'SMPTE 2067-201' : 'SMPTE 429'
     : writerInfo.labelSetType === 'MXF Interop' ? 'Interop' : 'Unknown';
+  const nativeDescription = essence.type === 'dolby-atmos' ? 'Dolby ATMOS' : essence.description;
   const plural = count === 1n ? '' : 's';
-  const lines = [`${prefix} file essence type is ${essence.description}, (${count} edit unit${plural}).`];
+  const lines = [`${prefix} file essence type is ${nativeDescription}, (${count} edit unit${plural}).`];
 
   if (showHeader) lines.push(...formatHeader(inspected));
   if (showIdentity) {
@@ -381,16 +382,31 @@ function formatDescriptor(descriptor) {
     ];
   }
   if (descriptor.type === 'dolby-atmos') {
-    return [
+    return compactLines([
       `          EditRate: ${rational(descriptor.editRate)}`,
       `   ContainerDuration: ${descriptor.containerDuration}`,
       `   DataEssenceCoding: ${formatUlHex(descriptor.dataEssenceCodingUl)}`,
-      `        AtmosVersion: ${descriptor.atmosVersion}`,
-      `     MaxChannelCount: ${descriptor.maxChannelCount}`,
-      `      MaxObjectCount: ${descriptor.maxObjectCount}`,
-      `             AtmosID: ${descriptor.atmosId}`,
-      `           FirstFrame: ${descriptor.firstFrame}`
-    ];
+      optionalLine('        AtmosVersion', descriptor.atmosVersion),
+      optionalLine('     MaxChannelCount', descriptor.maxChannelCount),
+      optionalLine('      MaxObjectCount', descriptor.maxObjectCount),
+      optionalLine('             AtmosID', descriptor.atmosId),
+      optionalLine('           FirstFrame', descriptor.firstFrame),
+      optionalLine('        IABSampleRate', descriptor.iabSampleRate && rational(descriptor.iabSampleRate))
+    ]);
+  }
+  if (descriptor.type === 'iab') {
+    return compactLines([
+      `                  EditRate: ${rational(descriptor.editRate)}`,
+      optionalLine('         ContainerDuration', descriptor.containerDuration),
+      optionalLine('          AudioSampleRate', descriptor.audioSamplingRate && rational(descriptor.audioSamplingRate)),
+      `              ChannelCount: ${descriptor.channelCount}`,
+      `          QuantizationBits: ${descriptor.quantizationBits}`,
+      optionalLine('      SoundEssenceCoding', descriptor.soundEssenceCodingUl && formatUlHex(descriptor.soundEssenceCodingUl)),
+      optionalLine('MCA Label Dictionary ID', descriptor.soundfield.dictionaryIdUl && formatUlHex(descriptor.soundfield.dictionaryIdUl)),
+      optionalLine('          MCA Tag Symbol', descriptor.soundfield.tagSymbol),
+      optionalLine('            MCA Tag Name', descriptor.soundfield.tagName),
+      optionalLine('         Spoken Language', descriptor.soundfield.spokenLanguage)
+    ]);
   }
   throw new Error(`Descriptor formatting is not implemented for ${descriptor.type}`);
 }
@@ -416,6 +432,9 @@ function formatCoding(descriptor) {
   if (['timed-text', 'd-cinema-generic-data', 'dolby-atmos'].includes(descriptor.type)) {
     return [`DataEssenceCoding: ${formatUlHex(descriptor.dataEssenceCodingUl)}`];
   }
+  if (descriptor.type === 'iab' && descriptor.soundEssenceCodingUl) {
+    return [`SoundEssenceCoding: ${formatUlHex(descriptor.soundEssenceCodingUl)}`];
+  }
   return [];
 }
 
@@ -430,6 +449,14 @@ function normalizeTimedTextMediaType(value) {
 
 function rational(value) {
   return `${value.numerator}/${value.denominator}`;
+}
+
+function optionalLine(label, value) {
+  return value === null || value === undefined || value === '' ? null : `${label}: ${value}`;
+}
+
+function compactLines(lines) {
+  return lines.filter((line) => line !== null);
 }
 
 function formatUlHex(value) {

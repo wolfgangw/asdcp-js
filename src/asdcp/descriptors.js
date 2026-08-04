@@ -14,8 +14,15 @@ const KEYS = {
   timedTextResource: mdd('TimedTextResourceSubDescriptor').ulHex,
   dcData: mdd('DCDataDescriptor').ulHex,
   privateDcData: mdd('PrivateDCDataDescriptor').ulHex,
-  dolbyAtmos: mdd('DolbyAtmosSubDescriptor').ulHex
+  dolbyAtmos: mdd('DolbyAtmosSubDescriptor').ulHex,
+  iab: mdd('IABEssenceDescriptor').ulHex,
+  iabSoundfield: mdd('IABSoundfieldLabelSubDescriptor').ulHex,
+  preface: mdd('Preface').ulHex
 };
+
+// ST 429-18 added this property after the pinned AS-DCP MDD table was created.
+// Keep it supplemental instead of modifying the generated upstream dictionary.
+const IAB_SAMPLE_RATE_UL = '060e2b340101010e040203010f000000';
 
 const CHANNEL_FORMATS = new Map([
   [mdd('DCAudioChannelCfg_1_5p1').ulHex, 1],
@@ -78,6 +85,7 @@ export function parseEssenceDescriptor(headerMetadata, essenceType, { metadataGr
   if (essenceType === 'timed-text') return parseTimedTextDescriptor(headerMetadata);
   if (essenceType === 'd-cinema-generic-data') return parseGenericDataDescriptor(headerMetadata);
   if (essenceType === 'dolby-atmos') return parseAtmosDescriptor(headerMetadata);
+  if (essenceType === 'iab') return parseIabDescriptor(headerMetadata);
   return null;
 }
 
@@ -368,7 +376,9 @@ export function parseGenericDataDescriptor(headerMetadata) {
   return {
     type: 'd-cinema-generic-data',
     editRate: readRational(value(descriptor, 'FileDescriptor_SampleRate')),
+    linkedTrackId: readNullableUint32(optionalValue(descriptor, 'FileDescriptor_LinkedTrackID')),
     containerDuration: readInt64(value(descriptor, 'FileDescriptor_ContainerDuration')),
+    essenceContainerUl: readNullableUl(optionalValue(descriptor, 'FileDescriptor_EssenceContainer')),
     dataEssenceCodingUl: toHex(value(descriptor, 'GenericDataEssenceDescriptor_DataEssenceCoding'))
   };
 }
@@ -376,15 +386,107 @@ export function parseGenericDataDescriptor(headerMetadata) {
 export function parseAtmosDescriptor(headerMetadata) {
   const base = parseGenericDataDescriptor(headerMetadata);
   const subDescriptor = requireSet(headerMetadata, KEYS.dolbyAtmos, 'DolbyAtmosSubDescriptor');
+  const immersiveAudioVersion = readNullableUint8(optionalValue(
+    subDescriptor, 'DolbyAtmosSubDescriptor_AtmosVersion'
+  ));
+  const immersiveAudioId = readNullableUuid(optionalValue(
+    subDescriptor, 'DolbyAtmosSubDescriptor_AtmosID'
+  ));
   return {
     ...base,
     type: 'dolby-atmos',
-    atmosVersion: readUint8(value(subDescriptor, 'DolbyAtmosSubDescriptor_AtmosVersion')),
-    maxChannelCount: readUint16(value(subDescriptor, 'DolbyAtmosSubDescriptor_MaxChannelCount')),
-    maxObjectCount: readUint16(value(subDescriptor, 'DolbyAtmosSubDescriptor_MaxObjectCount')),
-    atmosId: readUuid(value(subDescriptor, 'DolbyAtmosSubDescriptor_AtmosID')),
-    firstFrame: readUint32(value(subDescriptor, 'DolbyAtmosSubDescriptor_FirstFrame'))
+    family: 'immersive-audio',
+    standard: 'SMPTE ST 429-18',
+    wrapping: 'frame',
+    descriptorSet: 'PrivateDCDataDescriptor',
+    subDescriptorSet: 'DolbyAtmosSubDescriptor',
+    immersiveAudioVersion,
+    maxChannelCount: readNullableUint16(optionalValue(
+      subDescriptor, 'DolbyAtmosSubDescriptor_MaxChannelCount'
+    )),
+    maxObjectCount: readNullableUint16(optionalValue(
+      subDescriptor, 'DolbyAtmosSubDescriptor_MaxObjectCount'
+    )),
+    immersiveAudioId,
+    firstFrame: readNullableUint32(optionalValue(
+      subDescriptor, 'DolbyAtmosSubDescriptor_FirstFrame'
+    )),
+    iabSampleRate: readNullableRational(optionalValueByUl(subDescriptor, IAB_SAMPLE_RATE_UL)),
+    // Compatibility aliases for callers using the historical AS-DCP names.
+    atmosVersion: immersiveAudioVersion,
+    atmosId: immersiveAudioId
   };
+}
+
+export function parseIabDescriptor(headerMetadata) {
+  const descriptor = requireSet(headerMetadata, KEYS.iab, 'IABEssenceDescriptor');
+  const soundfield = requireSet(
+    headerMetadata, KEYS.iabSoundfield, 'IABSoundfieldLabelSubDescriptor'
+  );
+  return {
+    type: 'iab',
+    family: 'immersive-audio',
+    standard: 'SMPTE ST 2067-201',
+    wrapping: 'clip',
+    descriptorSet: 'IABEssenceDescriptor',
+    subDescriptorSet: 'IABSoundfieldLabelSubDescriptor',
+    editRate: readRational(value(descriptor, 'FileDescriptor_SampleRate')),
+    linkedTrackId: readNullableUint32(optionalValue(descriptor, 'FileDescriptor_LinkedTrackID')),
+    containerDuration: readNullableInt64(optionalValue(
+      descriptor, 'FileDescriptor_ContainerDuration'
+    )),
+    essenceContainerUl: readNullableUl(optionalValue(
+      descriptor, 'FileDescriptor_EssenceContainer'
+    )),
+    audioSamplingRate: readRational(value(
+      descriptor, 'GenericSoundEssenceDescriptor_AudioSamplingRate'
+    )),
+    channelCount: readUint32(value(descriptor, 'GenericSoundEssenceDescriptor_ChannelCount')),
+    quantizationBits: readUint32(value(
+      descriptor, 'GenericSoundEssenceDescriptor_QuantizationBits'
+    )),
+    soundEssenceCodingUl: readNullableUl(optionalValue(
+      descriptor, 'GenericSoundEssenceDescriptor_SoundEssenceCoding'
+    )),
+    referenceImageEditRate: readNullableRational(optionalValue(
+      descriptor, 'GenericSoundEssenceDescriptor_ReferenceImageEditRate'
+    )),
+    referenceAudioAlignmentLevel: readNullableUint8(optionalValue(
+      descriptor, 'GenericSoundEssenceDescriptor_ReferenceAudioAlignmentLevel'
+    )),
+    conformsToSpecifications: parseConformsToSpecifications(headerMetadata),
+    soundfield: {
+      dictionaryIdUl: readNullableUl(optionalValue(
+        soundfield, 'MCALabelSubDescriptor_MCALabelDictionaryID'
+      )),
+      linkId: readNullableUuid(optionalValue(soundfield, 'MCALabelSubDescriptor_MCALinkID')),
+      tagSymbol: readNullableUtf16(optionalValue(
+        soundfield, 'MCALabelSubDescriptor_MCATagSymbol'
+      )),
+      tagName: readNullableUtf16(optionalValue(
+        soundfield, 'MCALabelSubDescriptor_MCATagName'
+      )),
+      spokenLanguage: readNullableUtf8(optionalValue(
+        soundfield, 'MCALabelSubDescriptor_RFC5646SpokenLanguage'
+      )),
+      audioContentKind: readNullableUtf16(optionalValue(
+        soundfield, 'MCALabelSubDescriptor_MCAAudioContentKind'
+      )),
+      audioElementKind: readNullableUtf16(optionalValue(
+        soundfield, 'MCALabelSubDescriptor_MCAAudioElementKind'
+      )),
+      title: readNullableUtf16(optionalValue(soundfield, 'MCALabelSubDescriptor_MCATitle')),
+      titleVersion: readNullableUtf16(optionalValue(
+        soundfield, 'MCALabelSubDescriptor_MCATitleVersion'
+      ))
+    }
+  };
+}
+
+function parseConformsToSpecifications(headerMetadata) {
+  const preface = findSet(headerMetadata, KEYS.preface);
+  const bytes = preface && optionalValue(preface, 'Preface_ConformsToSpecifications');
+  return bytes ? readUlBatch(bytes) : [];
 }
 
 export class DescriptorError extends Error {
@@ -484,6 +586,10 @@ function optionalValue(localSet, name) {
     (entry.tag === 0 ? null : localSet.byTag.get(entry.tag)?.value ?? null);
 }
 
+function optionalValueByUl(localSet, ulHex) {
+  return localSet.byUl.get(ulHex)?.value ?? null;
+}
+
 function readRational(bytes) {
   if (bytes.byteLength !== 8) throw new DescriptorError('Rational value is not 8 bytes');
   const reader = new ByteReader(bytes);
@@ -508,6 +614,56 @@ function readUint32(bytes) {
 function readInt64(bytes) {
   if (bytes.byteLength !== 8) throw new DescriptorError('64-bit value is not 8 bytes');
   return new ByteReader(bytes).readInt64();
+}
+
+function readNullableUint8(bytes) {
+  return bytes ? readUint8(bytes) : null;
+}
+
+function readNullableUint16(bytes) {
+  return bytes ? readUint16(bytes) : null;
+}
+
+function readNullableUint32(bytes) {
+  return bytes ? readUint32(bytes) : null;
+}
+
+function readNullableInt64(bytes) {
+  return bytes ? readInt64(bytes) : null;
+}
+
+function readNullableRational(bytes) {
+  return bytes ? readRational(bytes) : null;
+}
+
+function readNullableUuid(bytes) {
+  return bytes ? readUuid(bytes) : null;
+}
+
+function readNullableUl(bytes) {
+  return bytes ? toHex(bytes) : null;
+}
+
+function readNullableUtf16(bytes) {
+  return bytes ? readUtf16(bytes) : null;
+}
+
+function readNullableUtf8(bytes) {
+  return bytes ? new TextDecoder().decode(bytes).replace(/\0+$/u, '') : null;
+}
+
+function readUlBatch(bytes) {
+  const reader = new ByteReader(bytes);
+  if (reader.remaining < 8) throw new DescriptorError('UL batch is truncated');
+  const count = reader.readUint32();
+  const itemSize = reader.readUint32();
+  if (count > 0 && itemSize !== 16) {
+    throw new DescriptorError('UL batch item size is not 16 bytes', { count, itemSize });
+  }
+  if (reader.remaining !== count * itemSize) {
+    throw new DescriptorError('UL batch size does not match its value length');
+  }
+  return Array.from({ length: count }, () => toHex(reader.readBytes(16)));
 }
 
 function readUuid(bytes) {
