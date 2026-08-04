@@ -51,8 +51,37 @@ const MCA_CHANNEL_ROLES = new Map([
   ['VIN', 'DCAudioChannel_VIN']
 ].map(([role, name]) => [mdd(name).ulHex, role]));
 
+// The two rear-top entries are duplicated as DCAudioChannel_Ltrs in the
+// pinned upstream MDD table, so keep the registered ULs explicit here.
+MCA_CHANNEL_ROLES.set(mdd('DCAudioChannel_Ltfs').ulHex, 'Ltfs');
+MCA_CHANNEL_ROLES.set(mdd('DCAudioChannel_Rtfs').ulHex, 'Rtfs');
+MCA_CHANNEL_ROLES.set('060e2b34040101050e09010104070000', 'Ltrs');
+MCA_CHANNEL_ROLES.set('060e2b34040101050e09010104080000', 'Rtrs');
+
 const PROGRAMME_CHANNEL_ROLES = new Set([
-  'L', 'R', 'C', 'LFE', 'Ls', 'Rs', 'Lss', 'Rss', 'Lrs', 'Rrs', 'Lc', 'Rc', 'Cs'
+  'L', 'R', 'C', 'LFE', 'Ls', 'Rs', 'Lss', 'Rss', 'Lrs', 'Rrs', 'Lc', 'Rc', 'Cs',
+  'Ltfs', 'Rtfs', 'Ltrs', 'Rtrs'
+]);
+
+const STANDALONE_MCA_CHANNEL_ROLES = new Set(['HI', 'VIN']);
+
+const MCA_SOUNDFIELD_GROUPS = new Map([
+  [mdd('DCAudioSoundfield_51').ulHex, soundfieldDefinition('5.1', [
+    'L', 'R', 'C', 'LFE', 'Ls', 'Rs'
+  ])],
+  [mdd('DCAudioSoundfield_71').ulHex, soundfieldDefinition('7.1 DS', [
+    'L', 'R', 'C', 'LFE', 'Lss', 'Rss', 'Lrs', 'Rrs'
+  ])],
+  [mdd('DCAudioSoundfield_SDS').ulHex, soundfieldDefinition('7.1 SDS', [
+    'L', 'R', 'C', 'LFE', 'Ls', 'Rs', 'Lc', 'Rc'
+  ])],
+  [mdd('DCAudioSoundfield_61').ulHex, soundfieldDefinition('6.1', [
+    'L', 'R', 'C', 'LFE', 'Lss', 'Rss', 'Cs'
+  ])],
+  [mdd('DCAudioSoundfield_M').ulHex, soundfieldDefinition('Mono', ['C'])],
+  [mdd('DCAudioSoundfield_514').ulHex, soundfieldDefinition('5.1.4', [
+    'L', 'R', 'C', 'LFE', 'Ls', 'Rs', 'Ltfs', 'Rtfs', 'Ltrs', 'Rtrs'
+  ])]
 ]);
 
 const STATIC_CHANNEL_LAYOUTS = new Map([
@@ -143,6 +172,7 @@ function resolvePcmChannelMetadata({ channelCount, channelAssignmentUl, metadata
   const issues = [];
   const mcaLabels = parseMcaLabels(metadataGraph);
   if (mcaLabels.audioChannels.length > 0) {
+    const mcaResolution = resolveMcaProgrammeChannels(mcaLabels, issues);
     const byChannelId = new Map();
     for (const label of mcaLabels.audioChannels) {
       if (!Number.isInteger(label.channelId) || label.channelId < 1 || label.channelId > channelCount) {
@@ -165,13 +195,13 @@ function resolvePcmChannelMetadata({ channelCount, channelAssignmentUl, metadata
       audioChannels: Array.from({ length: channelCount }, (_, index) => {
         const label = byChannelId.get(index + 1);
         return label
-          ? normalizedChannel(index, label.role, 'mca', label)
+          ? normalizedChannel(index, label.role, 'mca', label, mcaResolution.programme.get(label))
           : normalizedChannel(index, null, 'mca');
       }),
       channelLayout: {
         source: 'mca',
         name: mcaLabels.soundfieldGroups.map((group) => group.symbol).filter(Boolean).join(' + ') || 'MCA',
-        resolved: byChannelId.size > 0
+        resolved: mcaResolution.resolved && issues.length === 0
       },
       mcaLabels,
       issues
@@ -225,6 +255,89 @@ function resolvePcmChannelMetadata({ channelCount, channelAssignmentUl, metadata
   };
 }
 
+function resolveMcaProgrammeChannels(mcaLabels, issues) {
+  const programme = new Map(mcaLabels.audioChannels.map((label) => [label, false]));
+  if (mcaLabels.soundfieldGroups.length !== 1) {
+    issues.push({
+      code: 'mxf.pcm.mca-soundfield-group-count',
+      message: `MCA metadata has ${mcaLabels.soundfieldGroups.length} soundfield-group labels; exactly one is required`
+    });
+    return { programme, resolved: false };
+  }
+
+  const group = mcaLabels.soundfieldGroups[0];
+  const definition = MCA_SOUNDFIELD_GROUPS.get(group.dictionaryIdUl);
+  if (!definition) {
+    issues.push({
+      code: 'mxf.pcm.mca-soundfield-group-unknown',
+      message: `MCA soundfield group ${group.dictionaryIdUl ?? '[missing dictionary ID]'} is not a recognized D-Cinema soundfield group`
+    });
+    return { programme, resolved: false };
+  }
+  if (!group.linkId) {
+    issues.push({
+      code: 'mxf.pcm.mca-soundfield-group-link-id-missing',
+      message: `MCA ${definition.name} soundfield group has no MCALinkID`
+    });
+    return { programme, resolved: false };
+  }
+
+  const seenRoles = new Set();
+  for (const label of mcaLabels.audioChannels) {
+    const role = label.role;
+    if (STANDALONE_MCA_CHANNEL_ROLES.has(role)) {
+      if (label.soundfieldGroupLinkId) issues.push({
+        code: 'mxf.pcm.mca-standalone-channel-grouped',
+        message: `MCA ${role} channel ${label.channelId ?? '[missing ID]'} must not belong to a soundfield group`
+      });
+      continue;
+    }
+    if (!role) {
+      if (label.soundfieldGroupLinkId === group.linkId) issues.push({
+        code: 'mxf.pcm.mca-channel-role-unknown',
+        message: `MCA channel ${label.channelId ?? '[missing ID]'} belongs to the ${definition.name} soundfield group but has an unknown channel dictionary ID`
+      });
+      continue;
+    }
+    if (seenRoles.has(role)) issues.push({
+      code: 'mxf.pcm.mca-channel-role-duplicate',
+      message: `MCA channel role ${role} is assigned more than once`
+    });
+    seenRoles.add(role);
+    if (!definition.roles.has(role)) {
+      issues.push({
+        code: 'mxf.pcm.mca-channel-role-incompatible',
+        message: `MCA channel role ${role} is not part of the ${definition.name} soundfield group`
+      });
+      continue;
+    }
+    if (!label.soundfieldGroupLinkId) {
+      issues.push({
+        code: 'mxf.pcm.mca-channel-group-link-missing',
+        message: `MCA ${role} channel ${label.channelId ?? '[missing ID]'} has no SoundfieldGroupLinkID`
+      });
+      continue;
+    }
+    if (label.soundfieldGroupLinkId !== group.linkId) {
+      issues.push({
+        code: 'mxf.pcm.mca-channel-group-link-mismatch',
+        message: `MCA ${role} channel ${label.channelId ?? '[missing ID]'} does not reference the declared ${definition.name} soundfield group`
+      });
+      continue;
+    }
+    if (label.language && group.language && label.language !== group.language) issues.push({
+      code: 'mxf.pcm.mca-channel-language-mismatch',
+      message: `MCA ${role} channel language ${label.language} does not match soundfield-group language ${group.language}`
+    });
+    programme.set(label, true);
+  }
+  return { programme, resolved: true };
+}
+
+function soundfieldDefinition(name, roles) {
+  return Object.freeze({ name, roles: new Set(roles) });
+}
+
 function parseMcaLabels(metadataGraph) {
   if (!metadataGraph) return { soundfieldGroups: [], audioChannels: [] };
   const waveDescriptor = metadataGraph.objects.find((object) => object.keyHex === KEYS.waveAudio);
@@ -265,7 +378,7 @@ function propertyValue(object, name) {
   return object.properties[name]?.value ?? null;
 }
 
-function normalizedChannel(index, role, source, label = {}) {
+function normalizedChannel(index, role, source, label = {}, programme = null) {
   return {
     index,
     channelId: index + 1,
@@ -276,7 +389,7 @@ function normalizedChannel(index, role, source, label = {}) {
     linkId: label.linkId ?? null,
     soundfieldGroupLinkId: label.soundfieldGroupLinkId ?? null,
     language: label.language ?? null,
-    programme: PROGRAMME_CHANNEL_ROLES.has(role),
+    programme: programme ?? PROGRAMME_CHANNEL_ROLES.has(role),
     source
   };
 }

@@ -56,8 +56,7 @@ test('PCM descriptor resolves MCA dictionary labels to individual channel roles'
       MCALabelSubDescriptor_MCALabelDictionaryID: namedUl('DCAudioChannel_HI'),
       MCALabelSubDescriptor_MCALinkID: uuid(7),
       MCALabelSubDescriptor_MCATagSymbol: utf16('chHI'),
-      MCALabelSubDescriptor_MCAChannelID: u32(2),
-      AudioChannelLabelSubDescriptor_SoundfieldGroupLinkID: soundfieldLinkId
+      MCALabelSubDescriptor_MCAChannelID: u32(2)
     })
   ]);
 
@@ -70,6 +69,49 @@ test('PCM descriptor resolves MCA dictionary labels to individual channel roles'
     { channelId: 2, role: 'HI', symbol: 'chHI', programme: false, language: null }
   ]);
   assert.equal(descriptor.mcaLabels.soundfieldGroups[0].name, '5.1');
+  assert.deepEqual(descriptor.issues, []);
+});
+
+test('PCM descriptor only marks channels as programme when MCA group semantics resolve', () => {
+  const waveId = uuid(10);
+  const soundfieldId = uuid(11);
+  const leftId = uuid(12);
+  const wrongSoundfieldLinkId = uuid(13);
+  const header = metadata([
+    set('WaveAudioDescriptor', {
+      InterchangeObject_InstanceUID: waveId,
+      GenericDescriptor_SubDescriptors: uuidBatch([soundfieldId, leftId]),
+      FileDescriptor_SampleRate: rational(24, 1),
+      GenericSoundEssenceDescriptor_AudioSamplingRate: rational(48_000, 1),
+      GenericSoundEssenceDescriptor_ChannelCount: u32(1),
+      GenericSoundEssenceDescriptor_QuantizationBits: u32(24),
+      WaveAudioDescriptor_BlockAlign: u16(3),
+      WaveAudioDescriptor_AvgBps: u32(144_000),
+      FileDescriptor_ContainerDuration: i64(240n),
+      FileDescriptor_EssenceContainer: ul(0x01),
+      WaveAudioDescriptor_ChannelAssignment: namedUl('DCAudioChannelCfg_MCA')
+    }),
+    set('SoundfieldGroupLabelSubDescriptor', {
+      InterchangeObject_InstanceUID: soundfieldId,
+      MCALabelSubDescriptor_MCALabelDictionaryID: namedUl('DCAudioSoundfield_51'),
+      MCALabelSubDescriptor_MCALinkID: uuid(14),
+      MCALabelSubDescriptor_MCATagSymbol: utf16('sg51')
+    }),
+    set('AudioChannelLabelSubDescriptor', {
+      InterchangeObject_InstanceUID: leftId,
+      MCALabelSubDescriptor_MCALabelDictionaryID: namedUl('DCAudioChannel_L'),
+      MCALabelSubDescriptor_MCALinkID: uuid(15),
+      MCALabelSubDescriptor_MCATagSymbol: utf16('chL'),
+      MCALabelSubDescriptor_MCAChannelID: u32(1),
+      AudioChannelLabelSubDescriptor_SoundfieldGroupLinkID: wrongSoundfieldLinkId
+    })
+  ]);
+
+  const descriptor = parsePcmDescriptor(header, { metadataGraph: buildMetadataGraph(header) });
+  assert.equal(descriptor.audioChannels[0].programme, false);
+  assert.ok(descriptor.issues.some(({ code }) => (
+    code === 'mxf.pcm.mca-channel-group-link-mismatch'
+  )));
 });
 
 test('PCM descriptor exposes the fixed 7.1 SDS channel assignment', () => {
