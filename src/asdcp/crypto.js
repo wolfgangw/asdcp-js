@@ -36,6 +36,7 @@ export async function decryptFrameTriplet(value, {
   sourceLengthLimit,
   assetUuid,
   frameNumber,
+  sequenceNumber,
   labelSetType,
   usesHmac,
   verifyHmac,
@@ -48,6 +49,7 @@ export async function decryptFrameTriplet(value, {
     sourceLengthLimit,
     assetUuid,
     frameNumber,
+    sequenceNumber,
     usesHmac
   });
 
@@ -112,7 +114,7 @@ function parseEncryptedTriplet(value, expected) {
           frameNumber: expected.frameNumber
         }, { code: 'ERR_HMAC_METADATA' });
       }
-      const expectedSequence = BigInt(expected.frameNumber) + 1n;
+      const expectedSequence = BigInt(expected.sequenceNumber);
       if (sequenceNumber !== expectedSequence) {
         throw new DecryptionError('Encrypted frame integrity pack has an unexpected sequence number', {
           frameNumber: expected.frameNumber,

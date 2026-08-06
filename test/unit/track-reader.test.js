@@ -91,6 +91,142 @@ test('batched frame reads collapse contiguous edit units into one source read', 
   assert.equal(source.readCount, 1);
 });
 
+test('stereoscopic track access requires an eye and returns explicit left, right, or paired frames', async () => {
+  const left0 = makeEssencePacket([1, 2]);
+  const right0 = makeEssencePacket([3, 4, 5]);
+  const left1 = makeEssencePacket([6]);
+  const right1 = makeEssencePacket([7, 8]);
+  const firstPairLength = left0.length + right0.length;
+  const source = new MemoryRandomAccessSource(Uint8Array.from([
+    ...left0, ...right0, ...left1, ...right1
+  ]));
+  const inspection = makeInspection([
+    { streamOffset: 0n },
+    { streamOffset: BigInt(firstPairLength) }
+  ], { duration: 2n, essenceType: 'jpeg-2000-stereoscopic' });
+  const track = await openTrack(source, { inspection });
+
+  await assert.rejects(track.readFrame(0), /use readStereoscopicFrame/u);
+  await assert.rejects(
+    track.readStereoscopicFrame(0),
+    /eye must be 'left' or 'right'/u
+  );
+  const left = await track.readStereoscopicFrame(0, { eye: 'left' });
+  const right = await track.readStereoscopicFrame(0, { eye: 'right' });
+  const pair = await track.readStereoscopicFramePair(1);
+
+  assert.equal(left.eye, 'left');
+  assert.deepEqual(left.data, Uint8Array.of(1, 2));
+  assert.equal(right.eye, 'right');
+  assert.deepEqual(right.data, Uint8Array.of(3, 4, 5));
+  assert.equal(right.fileOffset, BigInt(left0.length));
+  assert.equal(pair.frameNumber, 1);
+  assert.equal(pair.left.eye, 'left');
+  assert.equal(pair.right.eye, 'right');
+  assert.deepEqual(pair.left.data, Uint8Array.of(6));
+  assert.deepEqual(pair.right.data, Uint8Array.of(7, 8));
+});
+
+test('stereoscopic batching preserves contiguous read-ahead for one eye or paired access', async () => {
+  const pairs = [
+    [[1], [2]],
+    [[3], [4]],
+    [[5], [6]]
+  ].map(([left, right]) => [makeEssencePacket(left), makeEssencePacket(right)]);
+  const bytes = Uint8Array.from(pairs.flat(2).flatMap((packet) => [...packet]));
+  const pairLength = pairs[0][0].length + pairs[0][1].length;
+  const inspection = makeInspection([
+    { streamOffset: 0n },
+    { streamOffset: BigInt(pairLength) },
+    { streamOffset: BigInt(pairLength * 2) }
+  ], { duration: 3n, essenceType: 'jpeg-2000-stereoscopic' });
+
+  const rightSource = new CountingSource(bytes);
+  const rightTrack = await openTrack(rightSource, { inspection });
+  const rightValues = [];
+  for await (const frame of rightTrack.stereoscopicFrames({
+    eye: 'right', duration: 2, maxBatchBytes: 1024
+  })) rightValues.push(frame.data[0]);
+  assert.deepEqual(rightValues, [2, 4]);
+  assert.equal(rightSource.readCount, 1);
+
+  const pairSource = new CountingSource(bytes);
+  const pairTrack = await openTrack(pairSource, { inspection });
+  const pairValues = [];
+  for await (const frame of pairTrack.stereoscopicFramePairs({
+    duration: 2, maxBatchBytes: 1024
+  })) pairValues.push([frame.left.data[0], frame.right.data[0]]);
+  assert.deepEqual(pairValues, [[1, 2], [3, 4]]);
+  assert.equal(pairSource.readCount, 1);
+});
+
+test('stereoscopic right-eye access cannot cross the next indexed edit-unit boundary', async () => {
+  const firstLeft = makeEssencePacket([1]);
+  const secondLeft = makeEssencePacket([2]);
+  const secondRight = makeEssencePacket([3]);
+  const source = new MemoryRandomAccessSource(Uint8Array.from([
+    ...firstLeft, ...secondLeft, ...secondRight
+  ]));
+  const inspection = makeInspection([
+    { streamOffset: 0n },
+    { streamOffset: BigInt(firstLeft.length) }
+  ], { duration: 2n, essenceType: 'jpeg-2000-stereoscopic' });
+  const track = await openTrack(source, { inspection });
+
+  await assert.rejects(
+    track.readStereoscopicFrame(0, { eye: 'right' }),
+    /outside the indexed edit unit/u
+  );
+});
+
+test('stereoscopic unwrap defaults to both eyes and can select one eye', async () => {
+  const left = makeEssencePacket([1]);
+  const right = makeEssencePacket([2]);
+  const inspection = makeInspection([{ streamOffset: 0n }], {
+    duration: 1n,
+    essenceType: 'jpeg-2000-stereoscopic'
+  });
+  const both = [];
+  const progress = [];
+  for await (const unit of unwrap(
+    new MemoryRandomAccessSource(Uint8Array.from([...left, ...right])),
+    {
+      inspection,
+      numberWidth: 4,
+      filePrefix: 'stereo-',
+      onProgress: (event) => progress.push(event)
+    }
+  )) both.push(unit);
+  assert.deepEqual(both.map(({ filename, eye, data }) => [filename, eye, data[0]]), [
+    ['stereo-0000L.j2c', 'left', 1],
+    ['stereo-0000R.j2c', 'right', 2]
+  ]);
+  assert.deepEqual(progress, [{ completed: 1n, total: 1n, frameNumber: 0 }]);
+
+  const rightOnly = [];
+  for await (const unit of unwrap(
+    new MemoryRandomAccessSource(Uint8Array.from([...left, ...right])),
+    { inspection, eye: 'right' }
+  )) rightOnly.push(unit);
+  assert.deepEqual(rightOnly.map(({ filename, eye, data }) => [filename, eye, data[0]]), [
+    ['000000R.j2c', 'right', 2]
+  ]);
+});
+
+test('eye selection is rejected for monoscopic essence', async () => {
+  const packet = makeEssencePacket([1]);
+  const inspection = makeInspection([{ streamOffset: 0n }], { duration: 1n });
+  const source = new MemoryRandomAccessSource(packet);
+  const track = await openTrack(source, { inspection });
+
+  await assert.rejects(track.readFrame(0, { eye: 'left' }), /only valid for stereoscopic/u);
+  await assert.rejects(
+    track.readStereoscopicFrame(0, { eye: 'left' }),
+    /requires stereoscopic/u
+  );
+  await assert.rejects(track.readStereoscopicFramePair(0), /requires stereoscopic/u);
+});
+
 test('track reader requires a key for encrypted essence', async () => {
   const source = new MemoryRandomAccessSource(makeEssencePacket([1]));
   await assert.rejects(

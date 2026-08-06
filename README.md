@@ -29,6 +29,19 @@ const track = await openTrack(source, { inspection });
 const firstFrame = await track.readFrame(0);
 ```
 
+Stereoscopic JPEG 2000 tracks expose explicit eye and paired access. The MXF
+index addresses one logical composition edit unit containing consecutive left
+and right codestreams:
+
+```js
+const left = await track.readStereoscopicFrame(0, { eye: 'left' });
+const right = await track.readStereoscopicFrame(0, { eye: 'right' });
+const pair = await track.readStereoscopicFramePair(0);
+```
+
+`unwrap()` defaults to both eyes for stereoscopic tracks and uses `L.j2c` and
+`R.j2c` filenames. Pass `eye: 'left'` or `eye: 'right'` to extract one eye.
+
 Encrypted essence uses a 128-bit key value obtained from a (D)KDM or another
 trusted key source. `verifyHmac` corresponds to `asdcp-unwrap -m`:
 

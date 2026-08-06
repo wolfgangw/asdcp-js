@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import test from 'node:test';
-import { DecryptionError, openTrack } from '../../src/index.js';
+import { DecryptionError, inspectMxf, MemoryRandomAccessSource, openTrack } from '../../src/index.js';
 import { deriveSmpteMicKey } from '../../src/asdcp/crypto.js';
 import { NodeFileRandomAccessSource } from '../../src/node.js';
 
@@ -55,6 +55,63 @@ test('encrypted frame extraction rejects an incorrect key', async () => {
     await assert.rejects(
       track.readFrame(0),
       (error) => error instanceof DecryptionError && error.code === 'ERR_DECRYPTION_CHECK'
+    );
+  } finally {
+    await source.close();
+  }
+});
+
+test('encrypted stereoscopic eye pairs use consecutive left and right integrity sequences', async () => {
+  const key = (await readFile(keyFile, 'utf8')).trim();
+  const source = await NodeFileRandomAccessSource.open(fixture);
+  try {
+    const inspection = await inspectMxf(source, { includeIndex: true });
+    const sourceTrack = await openTrack(source, { inspection, key, verifyHmac: true });
+    const first = await sourceTrack.readFrame(0);
+    const second = await sourceTrack.readFrame(1);
+    const firstPacket = await source.read(first.fileOffset, first.klv.totalLength);
+    const secondPacket = await source.read(second.fileOffset, second.klv.totalLength);
+    const pairSource = new MemoryRandomAccessSource(Uint8Array.from([
+      ...firstPacket, ...secondPacket
+    ]));
+    const pairInspection = {
+      ...inspection,
+      essence: {
+        ...inspection.essence,
+        type: 'jpeg-2000-stereoscopic',
+        editUnitCount: 1n
+      },
+      structure: {
+        ...inspection.structure,
+        headerPartition: { klv: { endOffset: 0n }, headerByteCount: 0n },
+        bodyPartitions: []
+      },
+      footerIndex: {
+        ...inspection.footerIndex,
+        duration: 1n,
+        entryCount: 1,
+        segments: [{
+          ...inspection.footerIndex.segments[0],
+          indexStartPosition: 0n,
+          indexDuration: 1n,
+          indexEntries: [{ streamOffset: 0n }]
+        }]
+      }
+    };
+    const pairTrack = await openTrack(pairSource, {
+      inspection: pairInspection,
+      key,
+      verifyHmac: true
+    });
+
+    const pair = await pairTrack.readStereoscopicFramePair(0);
+    assert.equal(pair.left.hmacVerified, true);
+    assert.equal(pair.right.hmacVerified, true);
+    assert.deepEqual(pair.left.data, first.data);
+    assert.deepEqual(pair.right.data, second.data);
+    assert.deepEqual(
+      (await pairTrack.readStereoscopicFrame(0, { eye: 'right' })).data,
+      second.data
     );
   } finally {
     await source.close();

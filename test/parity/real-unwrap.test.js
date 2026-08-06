@@ -31,6 +31,26 @@ const encryptedKeyFile = resolve(
   encryptedFixtureRoot,
   'j2c_d57a3994-f9ba-4596-b50c-c6c21aa6651e.key'
 );
+const stereoscopicFixtures = [
+  {
+    name: 'interop',
+    path: resolve(
+      fixtureBase,
+      'MadMieter_SHR-3D-25_F_DE-XX_DE_51_2K_CPP_20191025_CPP_IOP-3D_OV/' +
+      '01_Render_B_01_5DB2FAA7B0EE0031.mxf'
+    ),
+    forceNativeStereo: true
+  },
+  {
+    name: 'smpte',
+    path: resolve(
+      fixtureBase,
+      'Atmos/DolbyUnfold_TLR-3D_F_EN-XX_71-ATMOS_2K_20141112_DLB_SMPTE/' +
+      'Unfold_Update_3D_Flat__8312263e-e8ae-48b4-9463-29911b5c5b_v.mxf'
+    ),
+    forceNativeStereo: false
+  }
+];
 
 test('encrypted J2K extraction and HMAC verification match native asdcp-unwrap', async () => {
   const tools = await assertReferenceTools();
@@ -200,6 +220,69 @@ test('J2K frame range matches native asdcp-unwrap byte-for-byte', async (context
     assert.ok(source.totalBytesRead < 40n * 1024n * 1024n, `read ${source.totalBytesRead} bytes`);
   } finally {
     await source.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('Interop and SMPTE stereoscopic extraction match native left and right codestreams', async (context) => {
+  try {
+    await Promise.all(stereoscopicFixtures.map(({ path }) => access(path)));
+  } catch {
+    context.skip('Stereoscopic DCP fixtures are not installed');
+    return;
+  }
+  const tools = await assertReferenceTools();
+  const directory = await mkdtemp(join(tmpdir(), 'asdcp-js-stereoscopic-unwrap-'));
+
+  try {
+    for (const fixture of stereoscopicFixtures) {
+      await context.test(fixture.name, async () => {
+        const nativePrefix = `${fixture.name}-native-`;
+        const nativeArguments = [
+          '-b', '16777216',
+          ...(fixture.forceNativeStereo ? ['-3'] : []),
+          '-f', '100',
+          '-d', '1',
+          fixture.path,
+          nativePrefix
+        ];
+        const native = await runNative(tools.unwrapPath, nativeArguments, { cwd: directory });
+        assert.equal(native.code, 0, native.stderr);
+        const nativeLeft = await readFile(join(directory, `${nativePrefix}000100L.j2c`));
+        const nativeRight = await readFile(join(directory, `${nativePrefix}000100R.j2c`));
+
+        const source = await NodeFileRandomAccessSource.open(fixture.path);
+        try {
+          const both = [];
+          for await (const unit of unwrap(source, {
+            startFrame: 100,
+            duration: 1,
+            filePrefix: `${fixture.name}-js-`
+          })) both.push(unit);
+          assert.deepEqual(both.map(({ filename, eye }) => [filename, eye]), [
+            [`${fixture.name}-js-000100L.j2c`, 'left'],
+            [`${fixture.name}-js-000100R.j2c`, 'right']
+          ]);
+          assertBytesEqual(both[0].data, nativeLeft, `${fixture.name} left frame`);
+          assertBytesEqual(both[1].data, nativeRight, `${fixture.name} right frame`);
+
+          for (const [eye, expected] of [['left', nativeLeft], ['right', nativeRight]]) {
+            const selected = [];
+            for await (const unit of unwrap(source, {
+              startFrame: 100,
+              duration: 1,
+              eye
+            })) selected.push(unit);
+            assert.equal(selected.length, 1);
+            assert.equal(selected[0].eye, eye);
+            assertBytesEqual(selected[0].data, expected, `${fixture.name} ${eye}-only frame`);
+          }
+        } finally {
+          await source.close();
+        }
+      });
+    }
+  } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });

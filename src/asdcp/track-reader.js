@@ -59,7 +59,23 @@ export class TrackReader {
     this.crypto = crypto;
   }
 
-  async readFrame(frameNumber, { signal } = {}) {
+  async readFrame(frameNumber, { signal, eye } = {}) {
+    if (this.essenceType === 'jpeg-2000-stereoscopic') {
+      throw new TrackReaderError(
+        'readFrame() does not select a stereoscopic eye; use readStereoscopicFrame()'
+      );
+    }
+    const normalizedEye = normalizeFrameEye(this.essenceType, eye);
+    return this.readIndexedFrame(frameNumber, normalizedEye, signal);
+  }
+
+  async readStereoscopicFrame(frameNumber, { eye, signal } = {}) {
+    this.assertStereoscopic();
+    const normalizedEye = normalizeFrameEye(this.essenceType, eye);
+    return this.readIndexedFrame(frameNumber, normalizedEye, signal);
+  }
+
+  async readIndexedFrame(frameNumber, eye, signal) {
     signal?.throwIfAborted();
     const normalizedFrame = normalizeFrameNumber(frameNumber);
     if (this.duration === null || normalizedFrame >= this.duration) {
@@ -74,27 +90,46 @@ export class TrackReader {
       this.duration
     );
     const fileOffset = this.bodyOffset + streamOffset;
-    if (fileOffset < 0n || fileOffset + 17n > this.source.size) {
-      throw new TrackReaderError('Index entry points outside the source bounds', {
+    const editUnitEndOffset = this.editUnitEndFileOffset(normalizedFrame);
+    const leftKlv = await this.readEssenceKlv(
+      this.source, fileOffset, normalizedFrame, 'left', signal, 0n, editUnitEndOffset
+    );
+    const klv = eye === 'right'
+      ? await this.readEssenceKlv(
+        this.source, leftKlv.endOffset, normalizedFrame, 'right', signal, 0n, editUnitEndOffset
+      )
+      : leftKlv;
+    return this.decodeFrameResult(
+      this.source, klv, normalizedFrame, eye, streamOffset, 0n, signal
+    );
+  }
+
+  async readStereoscopicFramePair(frameNumber, { signal } = {}) {
+    this.assertStereoscopic();
+    signal?.throwIfAborted();
+    const normalizedFrame = normalizeFrameNumber(frameNumber);
+    if (this.duration === null || normalizedFrame >= this.duration) {
+      throw new TrackReaderError('Frame number is outside the track duration', {
         frameNumber: normalizedFrame,
-        fileOffset,
-        sourceSize: this.source.size
+        duration: this.duration
       });
     }
-    const klv = await trackOperation(
-      readKlvHeader(this.source, fileOffset, { signal }),
-      { frameNumber: normalizedFrame, fileOffset }
+    const streamOffset = this.streamOffset(normalizedFrame);
+    const fileOffset = this.bodyOffset + streamOffset;
+    const editUnitEndOffset = this.editUnitEndFileOffset(normalizedFrame);
+    const leftKlv = await this.readEssenceKlv(
+      this.source, fileOffset, normalizedFrame, 'left', signal, 0n, editUnitEndOffset
     );
-    this.assertEssenceKlv(klv, normalizedFrame, fileOffset);
-    const decoded = await this.decodeFrame(this.source, klv, normalizedFrame, signal);
-    return {
-      ...decoded,
-      frameNumber: Number(normalizedFrame),
-      fileOffset,
-      streamOffset,
-      klv,
-      mediaType: this.format.mediaType
-    };
+    const rightKlv = await this.readEssenceKlv(
+      this.source, leftKlv.endOffset, normalizedFrame, 'right', signal, 0n, editUnitEndOffset
+    );
+    const left = await this.decodeFrameResult(
+      this.source, leftKlv, normalizedFrame, 'left', streamOffset, 0n, signal
+    );
+    const right = await this.decodeFrameResult(
+      this.source, rightKlv, normalizedFrame, 'right', streamOffset, 0n, signal
+    );
+    return stereoscopicFrameResult(normalizedFrame, streamOffset, left, right);
   }
 
   async readTimedTextResource({ signal } = {}) {
@@ -145,10 +180,26 @@ export class TrackReader {
     }
   }
 
-  async *frames({ startFrame = 0, duration, signal, onProgress, maxBatchBytes } = {}) {
+  assertStereoscopic() {
+    if (this.essenceType !== 'jpeg-2000-stereoscopic') {
+      throw new TrackReaderError(
+        `Stereoscopic frame access requires stereoscopic JPEG 2000 essence, got ${this.essenceType}`
+      );
+    }
+  }
+
+  async *frames({ startFrame = 0, duration, eye, signal, onProgress, maxBatchBytes } = {}) {
+    if (this.essenceType === 'jpeg-2000-stereoscopic') {
+      throw new TrackReaderError(
+        'frames() does not select a stereoscopic eye; use stereoscopicFrames()'
+      );
+    }
+    const normalizedEye = normalizeFrameEye(this.essenceType, eye);
     const { start, count } = frameRange(this.duration, startFrame, duration);
     if (maxBatchBytes !== undefined) {
-      yield* this.batchedFrames({ start, count, signal, onProgress, maxBatchBytes });
+      yield* this.batchedFrames({
+        start, count, eye: normalizedEye, signal, onProgress, maxBatchBytes
+      });
       return;
     }
     for (let index = 0n; index < count; index += 1n) {
@@ -159,7 +210,66 @@ export class TrackReader {
     }
   }
 
-  async *batchedFrames({ start, count, signal, onProgress, maxBatchBytes }) {
+  async *stereoscopicFrames({
+    startFrame = 0,
+    duration,
+    eye,
+    signal,
+    onProgress,
+    maxBatchBytes
+  } = {}) {
+    this.assertStereoscopic();
+    const normalizedEye = normalizeFrameEye(this.essenceType, eye);
+    const { start, count } = frameRange(this.duration, startFrame, duration);
+    if (maxBatchBytes !== undefined) {
+      yield* this.batchedFrames({
+        start, count, eye: normalizedEye, signal, onProgress, maxBatchBytes
+      });
+      return;
+    }
+    for (let index = 0n; index < count; index += 1n) {
+      signal?.throwIfAborted();
+      const frame = await this.readStereoscopicFrame(start + index, {
+        eye: normalizedEye,
+        signal
+      });
+      onProgress?.({ completed: index + 1n, total: count, frameNumber: frame.frameNumber });
+      yield frame;
+    }
+  }
+
+  async *stereoscopicFramePairs({
+    startFrame = 0,
+    duration,
+    signal,
+    onProgress,
+    maxBatchBytes
+  } = {}) {
+    this.assertStereoscopic();
+    const { start, count } = frameRange(this.duration, startFrame, duration);
+    if (maxBatchBytes !== undefined) {
+      yield* this.batchedFrames({
+        start, count, paired: true, signal, onProgress, maxBatchBytes
+      });
+      return;
+    }
+    for (let index = 0n; index < count; index += 1n) {
+      signal?.throwIfAborted();
+      const frame = await this.readStereoscopicFramePair(start + index, { signal });
+      onProgress?.({ completed: index + 1n, total: count, frameNumber: frame.frameNumber });
+      yield frame;
+    }
+  }
+
+  async *batchedFrames({
+    start,
+    count,
+    eye = null,
+    paired = false,
+    signal,
+    onProgress,
+    maxBatchBytes
+  }) {
     const requestedLimit = positiveBigInt(maxBatchBytes, 'maxBatchBytes');
     const sourceLimit = this.source.maxReadBytes ?? requestedLimit;
     const batchLimit = requestedLimit < sourceLimit ? requestedLimit : sourceLimit;
@@ -169,7 +279,11 @@ export class TrackReader {
       signal?.throwIfAborted();
       const maximumBoundary = end < this.duration ? end : this.duration - 1n;
       if (cursor >= maximumBoundary) {
-        const frame = await this.readFrame(cursor, { signal });
+        const frame = paired
+          ? await this.readStereoscopicFramePair(cursor, { signal })
+          : eye === null
+            ? await this.readFrame(cursor, { signal })
+            : await this.readStereoscopicFrame(cursor, { eye, signal });
         onProgress?.({ completed: cursor - start + 1n, total: count, frameNumber: frame.frameNumber });
         yield frame;
         cursor += 1n;
@@ -180,7 +294,11 @@ export class TrackReader {
       let boundary = cursor + 1n;
       let boundaryOffset = this.streamOffset(boundary);
       if (boundaryOffset - startOffset > batchLimit) {
-        const frame = await this.readFrame(cursor, { signal });
+        const frame = paired
+          ? await this.readStereoscopicFramePair(cursor, { signal })
+          : eye === null
+            ? await this.readFrame(cursor, { signal })
+            : await this.readStereoscopicFrame(cursor, { eye, signal });
         onProgress?.({ completed: cursor - start + 1n, total: count, frameNumber: frame.frameNumber });
         yield frame;
         cursor += 1n;
@@ -204,20 +322,32 @@ export class TrackReader {
         signal?.throwIfAborted();
         const streamOffset = this.streamOffset(frameNumber);
         const relativeOffset = streamOffset - startOffset;
-        const localKlv = await trackOperation(
-          readKlvHeader(memory, relativeOffset, { signal }),
-          { frameNumber, fileOffset: this.bodyOffset + streamOffset }
+        const editUnitEndOffset = this.streamOffset(frameNumber + 1n) - startOffset;
+        const leftKlv = await this.readEssenceKlv(
+          memory, relativeOffset, frameNumber, 'left', signal, fileOffset, editUnitEndOffset
         );
-        this.assertEssenceKlv(localKlv, frameNumber, this.bodyOffset + streamOffset);
-        const decoded = await this.decodeFrame(memory, localKlv, frameNumber, signal);
-        const frame = {
-          ...decoded,
-          frameNumber: Number(frameNumber),
-          fileOffset: this.bodyOffset + streamOffset,
-          streamOffset,
-          klv: offsetKlv(localKlv, fileOffset),
-          mediaType: this.format.mediaType
-        };
+        let frame;
+        if (paired) {
+          const rightKlv = await this.readEssenceKlv(
+            memory, leftKlv.endOffset, frameNumber, 'right', signal, fileOffset, editUnitEndOffset
+          );
+          const left = await this.decodeFrameResult(
+            memory, leftKlv, frameNumber, 'left', streamOffset, fileOffset, signal
+          );
+          const right = await this.decodeFrameResult(
+            memory, rightKlv, frameNumber, 'right', streamOffset, fileOffset, signal
+          );
+          frame = stereoscopicFrameResult(frameNumber, streamOffset, left, right);
+        } else {
+          const localKlv = eye === 'right'
+            ? await this.readEssenceKlv(
+              memory, leftKlv.endOffset, frameNumber, 'right', signal, fileOffset, editUnitEndOffset
+            )
+            : leftKlv;
+          frame = await this.decodeFrameResult(
+            memory, localKlv, frameNumber, eye, streamOffset, fileOffset, signal
+          );
+        }
         onProgress?.({ completed: frameNumber - start + 1n, total: count, frameNumber: frame.frameNumber });
         yield frame;
       }
@@ -227,6 +357,14 @@ export class TrackReader {
 
   streamOffset(frameNumber) {
     return locateStreamOffset(this.inspection.footerIndex.segments, frameNumber, this.duration);
+  }
+
+  editUnitEndFileOffset(frameNumber) {
+    if (this.essenceType === 'jpeg-2000-stereoscopic' &&
+        this.duration !== null && frameNumber + 1n < this.duration) {
+      return this.bodyOffset + this.streamOffset(frameNumber + 1n);
+    }
+    return this.inspection.structure.footerPartition?.offset ?? this.source.size;
   }
 
   assertEssenceKlv(klv, frameNumber, fileOffset) {
@@ -243,7 +381,64 @@ export class TrackReader {
     }
   }
 
-  async decodeFrame(source, klv, frameNumber, signal) {
+  async readEssenceKlv(
+    source,
+    offset,
+    frameNumber,
+    eye,
+    signal,
+    offsetBase = 0n,
+    maximumOffset = source.size
+  ) {
+    const fileOffset = offsetBase + offset;
+    if (offset < 0n || offset + 17n > source.size) {
+      throw new TrackReaderError('Essence KLV position is outside the source bounds', {
+        frameNumber,
+        eye,
+        fileOffset,
+        sourceSize: source.size
+      });
+    }
+    if (offset + 17n > maximumOffset) {
+      throw new TrackReaderError('Essence KLV position is outside the indexed edit unit', {
+        frameNumber,
+        eye,
+        fileOffset,
+        editUnitEndOffset: offsetBase + maximumOffset
+      });
+    }
+    const klv = await trackOperation(
+      readKlvHeader(source, offset, { signal }),
+      { frameNumber, eye, fileOffset }
+    );
+    this.assertEssenceKlv(klv, frameNumber, fileOffset);
+    if (klv.endOffset > maximumOffset) {
+      throw new TrackReaderError('Essence KLV extends beyond the indexed edit unit', {
+        frameNumber,
+        eye,
+        fileOffset,
+        editUnitEndOffset: offsetBase + maximumOffset,
+        klvEndOffset: offsetBase + klv.endOffset
+      });
+    }
+    return klv;
+  }
+
+  async decodeFrameResult(source, klv, frameNumber, eye, streamOffset, offsetBase, signal) {
+    const decoded = await this.decodeFrame(source, klv, frameNumber, eye, signal);
+    const localFileOffset = klv.valueOffset - klv.headerLength;
+    return {
+      ...decoded,
+      frameNumber: Number(frameNumber),
+      eye,
+      fileOffset: offsetBase + localFileOffset,
+      streamOffset,
+      klv: offsetBase === 0n ? klv : offsetKlv(klv, offsetBase),
+      mediaType: this.format.mediaType
+    };
+  }
+
+  async decodeFrame(source, klv, frameNumber, eye, signal) {
     const value = await trackOperation(
       readKlvValue(source, klv, { signal }),
       { frameNumber, fileOffset: klv.valueOffset - klv.headerLength }
@@ -258,6 +453,7 @@ export class TrackReader {
       sourceLengthLimit: this.source.maxReadBytes ?? null,
       assetUuid: this.inspection.writerInfo.assetUuid,
       frameNumber: Number(frameNumber),
+      sequenceNumber: integritySequenceNumber(frameNumber, eye),
       labelSetType: this.inspection.writerInfo.labelSetType,
       usesHmac: this.inspection.writerInfo.hmac,
       verifyHmac: this.crypto.verifyHmac,
@@ -277,6 +473,7 @@ export async function* unwrap(source, {
   inspection,
   startFrame = 0,
   duration,
+  eye,
   numberWidth = 6,
   filePrefix = '',
   key,
@@ -288,6 +485,7 @@ export async function* unwrap(source, {
     throw new TypeError('numberWidth must be a positive safe integer');
   }
   const track = await openTrack(source, { inspection, key, verifyHmac, signal });
+  const unwrapEye = normalizeUnwrapEye(track.essenceType, eye);
   if (track.essenceType === 'timed-text') {
     yield* timedTextUnits(track, { filePrefix, signal, onProgress });
     return;
@@ -297,10 +495,24 @@ export async function* unwrap(source, {
       essenceType: track.essenceType
     });
   }
-  for await (const frame of track.frames({ startFrame, duration, signal, onProgress })) {
+  if (unwrapEye === 'both') {
+    for await (const frame of track.stereoscopicFramePairs({
+      startFrame, duration, signal, onProgress
+    })) {
+      yield stereoscopicUnwrapUnit(frame.left, filePrefix, numberWidth, track.format.extension);
+      yield stereoscopicUnwrapUnit(frame.right, filePrefix, numberWidth, track.format.extension);
+    }
+    return;
+  }
+  const frames = unwrapEye === null
+    ? track.frames({ startFrame, duration, signal, onProgress })
+    : track.stereoscopicFrames({
+      startFrame, duration, eye: unwrapEye, signal, onProgress
+    });
+  for await (const frame of frames) {
     yield {
       ...frame,
-      filename: `${filePrefix}${String(frame.frameNumber).padStart(numberWidth, '0')}.${track.format.extension}`
+      filename: unwrapFilename(frame, filePrefix, numberWidth, track.format.extension)
     };
   }
 }
@@ -585,6 +797,64 @@ function normalizeDuration(value) {
   const duration = toBigInt(value, 'duration');
   if (duration < 0n) throw new RangeError('duration must not be negative');
   return duration;
+}
+
+function normalizeFrameEye(essenceType, eye) {
+  const stereoscopic = essenceType === 'jpeg-2000-stereoscopic';
+  if (!stereoscopic) {
+    if (eye !== undefined && eye !== null) {
+      throw new TypeError(`eye is only valid for stereoscopic JPEG 2000 essence, got ${essenceType}`);
+    }
+    return null;
+  }
+  if (eye !== 'left' && eye !== 'right') {
+    throw new TypeError("eye must be 'left' or 'right' for stereoscopic JPEG 2000 essence");
+  }
+  return eye;
+}
+
+function normalizeUnwrapEye(essenceType, eye) {
+  if (essenceType !== 'jpeg-2000-stereoscopic') {
+    if (eye !== undefined && eye !== null) {
+      throw new TypeError(`eye is only valid for stereoscopic JPEG 2000 essence, got ${essenceType}`);
+    }
+    return null;
+  }
+  const normalized = eye ?? 'both';
+  if (!['left', 'right', 'both'].includes(normalized)) {
+    throw new TypeError("eye must be 'left', 'right', or 'both'");
+  }
+  return normalized;
+}
+
+function integritySequenceNumber(frameNumber, eye) {
+  const frame = BigInt(frameNumber);
+  if (eye === 'left') return frame * 2n + 1n;
+  if (eye === 'right') return frame * 2n + 2n;
+  return frame + 1n;
+}
+
+function stereoscopicFrameResult(frameNumber, streamOffset, left, right) {
+  return {
+    frameNumber: Number(frameNumber),
+    streamOffset,
+    mediaType: left.mediaType,
+    left,
+    right
+  };
+}
+
+function unwrapFilename(frame, filePrefix, numberWidth, extension) {
+  const number = String(frame.frameNumber).padStart(numberWidth, '0');
+  const eyeSuffix = frame.eye === 'left' ? 'L' : frame.eye === 'right' ? 'R' : '';
+  return `${filePrefix}${number}${eyeSuffix}.${extension}`;
+}
+
+function stereoscopicUnwrapUnit(frame, filePrefix, numberWidth, extension) {
+  return {
+    ...frame,
+    filename: unwrapFilename(frame, filePrefix, numberWidth, extension)
+  };
 }
 
 function normalizeUuid(value) {

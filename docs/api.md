@@ -354,6 +354,19 @@ interface TrackReader {
     options?: { signal?: AbortSignal }
   ): Promise<FrameResult>;
 
+  readStereoscopicFrame(
+    frameNumber: number | bigint,
+    options: {
+      eye: 'left' | 'right';
+      signal?: AbortSignal;
+    }
+  ): Promise<FrameResult>;
+
+  readStereoscopicFramePair(
+    frameNumber: number | bigint,
+    options?: { signal?: AbortSignal }
+  ): Promise<StereoscopicFrameResult>;
+
   frames(options?: {
     startFrame?: number | bigint;
     duration?: number | bigint;
@@ -361,6 +374,23 @@ interface TrackReader {
     maxBatchBytes?: number | bigint;
     onProgress?: (progress: FrameProgress) => void;
   }): AsyncGenerator<FrameResult>;
+
+  stereoscopicFrames(options: {
+    startFrame?: number | bigint;
+    duration?: number | bigint;
+    eye: 'left' | 'right';
+    signal?: AbortSignal;
+    maxBatchBytes?: number | bigint;
+    onProgress?: (progress: FrameProgress) => void;
+  }): AsyncGenerator<FrameResult>;
+
+  stereoscopicFramePairs(options?: {
+    startFrame?: number | bigint;
+    duration?: number | bigint;
+    signal?: AbortSignal;
+    maxBatchBytes?: number | bigint;
+    onProgress?: (progress: FrameProgress) => void;
+  }): AsyncGenerator<StereoscopicFrameResult>;
 
   readTimedTextResource(
     options?: { signal?: AbortSignal }
@@ -375,6 +405,7 @@ interface TrackReader {
 interface FrameResult {
   data: Uint8Array;            // plaintext essence
   frameNumber: number;
+  eye: 'left' | 'right' | null;
   fileOffset: bigint;
   streamOffset: bigint;
   klv: KlvHeader;              // container KLV; CryptEssence when encrypted
@@ -383,6 +414,14 @@ interface FrameResult {
   hmacVerified: true | null;
   plaintextOffset?: bigint;    // encrypted frames only
   sourceKey?: string;          // encrypted triplet SourceKey UL
+}
+
+interface StereoscopicFrameResult {
+  frameNumber: number;         // logical composition edit unit
+  streamOffset: bigint;        // indexed start of the left/right pair
+  mediaType: 'image/j2c';
+  left: FrameResult & { eye: 'left' };
+  right: FrameResult & { eye: 'right' };
 }
 
 interface FrameProgress {
@@ -396,6 +435,17 @@ interface FrameProgress {
 means verification was not requested or the track has no HMAC. Failed
 verification rejects and never returns frame bytes.
 
+Stereoscopic index entries address a logical composition edit unit containing
+consecutive left- and right-eye KLV packets. `readFrame()` and `frames()` are
+the monoscopic/general frame operations and reject stereoscopic tracks instead
+of accidentally treating the indexed left eye as a complete edit unit.
+`readStereoscopicFrame()` and `stereoscopicFrames()` require an explicit eye;
+their `Pair` counterparts return both codestreams under one logical frame
+number. Batched access reads contiguous indexed edit units and selects the
+requested eye(s) from the in-memory batch.
+For encrypted stereoscopic essence, integrity sequence numbers are checked as
+`2n+1` for the left eye and `2n+2` for the right eye.
+
 `readTimedTextResource()` adds `assetId` and forces
 `mediaType: 'application/xml'`. `readAncillaryResource()` returns
 `{ data, offset, length, klv, resourceId, mediaType }`.
@@ -404,7 +454,10 @@ verification rejects and never returns frame bytes.
 
 `unwrap()`, `unwrapTimedText()`, and `unwrapPcmWav()` accept the same `key`,
 `verifyHmac`, `signal`, and optional prior `inspection` as `openTrack()`.
-`unwrap()` adds `filename` to each `FrameResult`.
+`unwrap()` adds `filename` to each `FrameResult`. Its optional `eye` is
+`'left'`, `'right'`, or `'both'`. Stereoscopic extraction defaults to `'both'`
+and produces AS-DCP-compatible `000000L.j2c` and `000000R.j2c` names. The
+option is rejected for monoscopic essence.
 
 Timed-text units additionally have:
 
