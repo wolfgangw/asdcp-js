@@ -214,6 +214,9 @@ test('JPEG 2000 descriptor accepts an omitted optional quantization replica', ()
       GenericPictureEssenceDescriptor_StoredWidth: u32(2048),
       GenericPictureEssenceDescriptor_StoredHeight: u32(1080),
       GenericPictureEssenceDescriptor_AspectRatio: rational(2048, 1080),
+      GenericPictureEssenceDescriptor_TransferCharacteristic: ul(0x84),
+      RGBAEssenceDescriptor_ComponentMinRef: u32(0),
+      RGBAEssenceDescriptor_ComponentMaxRef: u32(4095),
       GenericPictureEssenceDescriptor_PictureEssenceCoding: ul(0x03)
     }),
     set('JPEG2000PictureSubDescriptor', {
@@ -242,6 +245,9 @@ test('JPEG 2000 descriptor accepts an omitted optional quantization replica', ()
   assert.equal(descriptor.quantization, null);
   assert.equal(descriptor.storedWidth, 2048);
   assert.equal(descriptor.componentCount, 3);
+  assert.equal(descriptor.transferCharacteristicUl, '060e2b34040101010401020203010184');
+  assert.equal(descriptor.componentMinRef, 0);
+  assert.equal(descriptor.componentMaxRef, 4095);
 });
 
 test('JPEG 2000 descriptor accepts omitted optional coding-style and quantization replicas', () => {
@@ -277,6 +283,9 @@ test('JPEG 2000 descriptor accepts omitted optional coding-style and quantizatio
   assert.equal(descriptor.quantization, null);
   assert.equal(descriptor.storedWidth, 1998);
   assert.equal(descriptor.componentCount, 3);
+  assert.equal(descriptor.transferCharacteristicUl, null);
+  assert.equal(descriptor.componentMinRef, null);
+  assert.equal(descriptor.componentMaxRef, null);
 });
 
 test('timed-text descriptor aggregates ancillary resources', () => {

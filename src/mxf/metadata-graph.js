@@ -73,6 +73,7 @@ const TYPES = new Map(Object.entries({
   GenericPictureEssenceDescriptor_StoredHeight: 'uint32',
   GenericPictureEssenceDescriptor_VideoLineMap: 'uint32Batch',
   GenericPictureEssenceDescriptor_AspectRatio: 'rational',
+  GenericPictureEssenceDescriptor_TransferCharacteristic: 'ul',
   GenericPictureEssenceDescriptor_PictureEssenceCoding: 'ul',
   CDCIEssenceDescriptor_ComponentDepth: 'uint32',
   CDCIEssenceDescriptor_HorizontalSubsampling: 'uint32',

@@ -415,6 +415,18 @@ export function parseJpeg2000Descriptor(headerMetadata, { stereoscopic = false }
     sampleRate: readRational(value(descriptor, 'FileDescriptor_SampleRate')),
     storedWidth: readUint32(value(descriptor, 'GenericPictureEssenceDescriptor_StoredWidth')),
     storedHeight: readUint32(value(descriptor, 'GenericPictureEssenceDescriptor_StoredHeight')),
+    transferCharacteristicUl: readNullableUl(optionalValue(
+      descriptor,
+      'GenericPictureEssenceDescriptor_TransferCharacteristic'
+    )),
+    componentMinRef: readNullableUint32(optionalValue(
+      descriptor,
+      'RGBAEssenceDescriptor_ComponentMinRef'
+    )),
+    componentMaxRef: readNullableUint32(optionalValue(
+      descriptor,
+      'RGBAEssenceDescriptor_ComponentMaxRef'
+    )),
     rsize: readUint16(value(subDescriptor, 'JPEG2000PictureSubDescriptor_Rsize')),
     xsize: readUint32(value(subDescriptor, 'JPEG2000PictureSubDescriptor_Xsize')),
     ysize: readUint32(value(subDescriptor, 'JPEG2000PictureSubDescriptor_Ysize')),
