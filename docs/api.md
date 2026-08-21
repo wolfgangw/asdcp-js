@@ -254,7 +254,7 @@ interface MetadataReference {
 
 | Type | Stable fields |
 | --- | --- |
-| `pcm` | `editRate`, `audioSamplingRate`, `locked`, `channelCount`, `quantizationBits`, `blockAlign`, `averageBytesPerSecond`, `linkedTrackId`, `containerDuration`, `essenceContainerUl`, `soundEssenceCoding`, `channelAssignmentUl`, `channelFormat`, `issues` |
+| `pcm` | `editRate`, `audioSamplingRate`, `locked`, `channelCount`, `quantizationBits`, `blockAlign`, `averageBytesPerSecond`, `linkedTrackId`, `containerDuration`, `essenceContainerUl`, `soundEssenceCoding`, `channelAssignmentUl`, `channelFormat`, `channelLayout`, `audioChannels`, `mcaLabels`, `issues` |
 | `jpeg-2000`, `jpeg-2000-stereoscopic` | `stereoscopic`, `aspectRatio`, `editRate`, `sampleRate`, `storedWidth`, `storedHeight`, `rsize`, `xsize`, `ysize`, `xOrigin`, `yOrigin`, `tileWidth`, `tileHeight`, `tileXOrigin`, `tileYOrigin`, `componentCount`, `containerDuration`, `components`, `codingStyle`, `quantization`, `extendedCapabilities`, `pictureEssenceCodingUl` |
 | `mpeg-2` | `sampleRate`, `frameLayout`, `storedWidth`, `storedHeight`, `aspectRatio`, `pictureEssenceCodingUl`, `componentDepth`, `horizontalSubsampling`, `verticalSubsampling`, `colorSiting`, `codedContentType`, `lowDelay`, `bitRate`, `profileAndLevel`, `containerDuration` |
 | `timed-text` | `editRate`, `containerDuration`, `assetId`, `ucsEncoding`, `namespaceName`, `rfc5646LanguageTagList`, `dataEssenceCodingUl`, `displayType`, `intrinsicPictureResolution`, `zPositionInUse`, `resources` |
@@ -263,6 +263,13 @@ interface MetadataReference {
 | `iab` | ST 2067-201 IAB: `family`, `standard`, `wrapping`, descriptor/subdescriptor set names, edit/sample rates, sound descriptor values, `conformsToSpecifications`, and typed `soundfield` MCA metadata |
 
 Timed-text resources have `{ resourceId, mediaType, essenceStreamId }`.
+
+PCM MCA channel entries expose their dictionary-derived `role`, stored symbol
+and name, one-based `channelId`, group linkage, language, and whether the
+channel belongs to the programme soundfield. The ST 430-12 FSK synchronization
+channel is reported as role `FSKSync` and `programme: false`. `asdcp-js`
+deliberately does not demodulate or validate the signal: `openTrack()` supplies
+the raw PCM edit units required for an application-level ST 430-12 parser.
 
 All ST 429-18 immersive-audio subdescriptor properties are optional and are
 returned as `null` when absent. `dolby-atmos` is retained as the public

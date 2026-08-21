@@ -48,7 +48,8 @@ const MCA_CHANNEL_ROLES = new Map([
   ['Rc', 'DCAudioChannel_Rc'],
   ['Cs', 'DCAudioChannel_Cs'],
   ['HI', 'DCAudioChannel_HI'],
-  ['VIN', 'DCAudioChannel_VIN']
+  ['VIN', 'DCAudioChannel_VIN'],
+  ['FSKSync', 'DCAudioChannel_FSKSyncSignalChannel']
 ].map(([role, name]) => [mdd(name).ulHex, role]));
 
 // The two rear-top entries are duplicated as DCAudioChannel_Ltrs in the
@@ -63,7 +64,7 @@ const PROGRAMME_CHANNEL_ROLES = new Set([
   'Ltfs', 'Rtfs', 'Ltrs', 'Rtrs'
 ]);
 
-const STANDALONE_MCA_CHANNEL_ROLES = new Set(['HI', 'VIN']);
+const STANDALONE_MCA_CHANNEL_ROLES = new Set(['HI', 'VIN', 'FSKSync']);
 
 const MCA_SOUNDFIELD_GROUPS = new Map([
   [mdd('DCAudioSoundfield_51').ulHex, soundfieldDefinition('5.1', [
@@ -257,6 +258,18 @@ function resolvePcmChannelMetadata({ channelCount, channelAssignmentUl, metadata
 
 function resolveMcaProgrammeChannels(mcaLabels, issues) {
   const programme = new Map(mcaLabels.audioChannels.map((label) => [label, false]));
+  const groupedChannels = mcaLabels.audioChannels.filter(({ role }) => (
+    !STANDALONE_MCA_CHANNEL_ROLES.has(role)
+  ));
+  if (groupedChannels.length === 0 && mcaLabels.soundfieldGroups.length === 0) {
+    for (const label of mcaLabels.audioChannels) {
+      if (label.soundfieldGroupLinkId) issues.push({
+        code: 'mxf.pcm.mca-standalone-channel-grouped',
+        message: `MCA ${label.role} channel ${label.channelId ?? '[missing ID]'} must not belong to a soundfield group`
+      });
+    }
+    return { programme, resolved: issues.length === 0 };
+  }
   if (mcaLabels.soundfieldGroups.length !== 1) {
     issues.push({
       code: 'mxf.pcm.mca-soundfield-group-count',

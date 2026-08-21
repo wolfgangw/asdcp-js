@@ -72,6 +72,56 @@ test('PCM descriptor resolves MCA dictionary labels to individual channel roles'
   assert.deepEqual(descriptor.issues, []);
 });
 
+test('PCM descriptor exposes a standalone ST 430-12 FSK Sync channel', () => {
+  const waveId = uuid(8);
+  const fskId = uuid(9);
+  const header = metadata([
+    set('WaveAudioDescriptor', {
+      InterchangeObject_InstanceUID: waveId,
+      GenericDescriptor_SubDescriptors: uuidBatch([fskId]),
+      FileDescriptor_SampleRate: rational(24, 1),
+      GenericSoundEssenceDescriptor_AudioSamplingRate: rational(48_000, 1),
+      GenericSoundEssenceDescriptor_ChannelCount: u32(14),
+      GenericSoundEssenceDescriptor_QuantizationBits: u32(24),
+      WaveAudioDescriptor_BlockAlign: u16(42),
+      WaveAudioDescriptor_AvgBps: u32(2_016_000),
+      FileDescriptor_ContainerDuration: i64(240n),
+      FileDescriptor_EssenceContainer: ul(0x01),
+      WaveAudioDescriptor_ChannelAssignment: namedUl('DCAudioChannelCfg_MCA')
+    }),
+    set('AudioChannelLabelSubDescriptor', {
+      InterchangeObject_InstanceUID: fskId,
+      MCALabelSubDescriptor_MCALabelDictionaryID: namedUl(
+        'DCAudioChannel_FSKSyncSignalChannel'
+      ),
+      MCALabelSubDescriptor_MCALinkID: uuid(16),
+      MCALabelSubDescriptor_MCATagSymbol: utf16('chFSKSync'),
+      MCALabelSubDescriptor_MCATagName: utf16('FSK Sync'),
+      MCALabelSubDescriptor_MCAChannelID: u32(14)
+    })
+  ]);
+
+  const descriptor = parsePcmDescriptor(header, { metadataGraph: buildMetadataGraph(header) });
+  assert.deepEqual(descriptor.channelLayout, { source: 'mca', name: 'MCA', resolved: true });
+  assert.deepEqual(
+    descriptor.audioChannels[13],
+    {
+      index: 13,
+      channelId: 14,
+      role: 'FSKSync',
+      symbol: 'chFSKSync',
+      name: 'FSK Sync',
+      dictionaryIdUl: mdd('DCAudioChannel_FSKSyncSignalChannel').ulHex,
+      linkId: '10101010-1010-1010-1010-101010101010',
+      soundfieldGroupLinkId: null,
+      language: null,
+      programme: false,
+      source: 'mca'
+    }
+  );
+  assert.deepEqual(descriptor.issues, []);
+});
+
 test('PCM descriptor only marks channels as programme when MCA group semantics resolve', () => {
   const waveId = uuid(10);
   const soundfieldId = uuid(11);
