@@ -96,6 +96,35 @@ interface PictureBitrate {
 UUID strings use lowercase canonical `8-4-4-4-12` form. UL values use 32
 lowercase hexadecimal digits without separators.
 
+## `inspectEncryptedTripletHeader()`
+
+```ts
+function inspectEncryptedTripletHeader(
+  valuePrefix: Uint8Array,
+  options?: { valueLength?: bigint | number }
+):
+  | { status: 'need-more' }
+  | {
+      status: 'parsed';
+      contextId: string;
+      plaintextOffset: bigint;
+      sourceKey: string;
+      sourceLength: bigint;
+      encryptedSourceValueOffset: bigint;
+      encryptedSourceValueLength: bigint;
+      plaintextValueOffset: bigint;
+      plaintextValueLength: bigint;
+    };
+```
+
+This keyless structural operation parses only the fixed Encrypted Triplet
+fields preceding the Encrypted Source Value. It identifies the source essence
+UL and the optional plaintext source prefix described by `PlaintextOffset`
+without decrypting or retaining ciphertext. Returned offsets are relative to
+the Encrypted Triplet value. An incomplete prefix returns `need-more`; malformed
+or impossible declared ranges throw `DecryptionError` with code
+`ERR_ENCRYPTED_TRIPLET`.
+
 ### MXF structure
 
 ```ts

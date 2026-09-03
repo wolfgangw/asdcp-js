@@ -29,6 +29,76 @@ export function normalizeDecryptionKey(key) {
   return bytes.slice();
 }
 
+/**
+ * Parses the fixed fields which precede an Encrypted Triplet's Encrypted
+ * Source Value without requiring a content key or retaining the ciphertext.
+ *
+ * `valuePrefix` may be an incomplete prefix of the Encrypted Triplet value.
+ * In that case the function returns `{ status: 'need-more' }`. Once the ESV
+ * BER length is available it returns the byte range containing the optional
+ * plaintext source prefix. Offsets are relative to the Encrypted Triplet
+ * value, not to the enclosing MXF file.
+ */
+export function inspectEncryptedTripletHeader(valuePrefix, { valueLength } = {}) {
+  if (!(valuePrefix instanceof Uint8Array)) {
+    throw new TypeError('valuePrefix must be a Uint8Array');
+  }
+  const normalizedValueLength = normalizeOptionalLength(valueLength, 'valueLength');
+  if (normalizedValueLength !== null && BigInt(valuePrefix.byteLength) > normalizedValueLength) {
+    throw new RangeError('valuePrefix is longer than valueLength');
+  }
+  try {
+    const reader = new ByteReader(valuePrefix);
+    const contextId = readField(reader, 'ContextID', 16).value;
+    const plaintextOffset = readUint64Field(reader, 'PlaintextOffset');
+    const sourceKey = readField(reader, 'SourceKey', 16).value;
+    const sourceLength = readUint64Field(reader, 'SourceLength');
+    const encryptedSourceValueLength = reader.readBerLength({ strict: false }).length;
+    const encryptedSourceValueOffset = BigInt(reader.offset);
+    const plaintextValueOffset = encryptedSourceValueOffset + BigInt(AES_BLOCK_SIZE * 2);
+
+    if (plaintextOffset > sourceLength) {
+      throw formatError('Encrypted triplet PlaintextOffset exceeds SourceLength', {
+        plaintextOffset,
+        sourceLength
+      });
+    }
+    if (encryptedSourceValueLength < BigInt(AES_BLOCK_SIZE * 2) + plaintextOffset) {
+      throw formatError('Encrypted source value is too short for its plaintext prefix', {
+        encryptedSourceValueLength,
+        plaintextOffset
+      });
+    }
+    if (normalizedValueLength !== null &&
+        encryptedSourceValueOffset + encryptedSourceValueLength > normalizedValueLength) {
+      throw formatError('Encrypted source value extends beyond the Encrypted Triplet value', {
+        encryptedSourceValueOffset,
+        encryptedSourceValueLength,
+        valueLength: normalizedValueLength
+      });
+    }
+
+    return Object.freeze({
+      status: 'parsed',
+      contextId: bytesToHex(contextId),
+      plaintextOffset,
+      sourceKey: bytesToHex(sourceKey),
+      sourceLength,
+      encryptedSourceValueOffset,
+      encryptedSourceValueLength,
+      plaintextValueOffset,
+      plaintextValueLength: plaintextOffset
+    });
+  } catch (error) {
+    if (error?.name === 'BinaryReadError' &&
+        (normalizedValueLength === null || BigInt(valuePrefix.byteLength) < normalizedValueLength)) {
+      return Object.freeze({ status: 'need-more' });
+    }
+    if (error instanceof DecryptionError) throw error;
+    throw formatError(`Could not parse encrypted triplet header: ${error.message}`, {}, error);
+  }
+}
+
 export async function decryptFrameTriplet(value, {
   key,
   contextId,
@@ -319,6 +389,19 @@ function readField(reader, name, expectedLength) {
 function readUint64Field(reader, name) {
   const field = readField(reader, name, 8);
   return new DataView(field.value.buffer, field.value.byteOffset, 8).getBigUint64(0, false);
+}
+
+function normalizeOptionalLength(value, name) {
+  if (value === undefined || value === null) return null;
+  const normalized = typeof value === 'bigint'
+    ? value
+    : typeof value === 'number' && Number.isSafeInteger(value)
+      ? BigInt(value)
+      : null;
+  if (normalized === null || normalized < 0n) {
+    throw new TypeError(`${name} must be a non-negative bigint or safe integer`);
+  }
+  return normalized;
 }
 
 function formatError(message, details = {}, cause) {

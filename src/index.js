@@ -18,6 +18,7 @@ export {
   writeUnwrappedFiles
 } from './io/output-sink.js';
 export { inspectMxf } from './asdcp/inspect.js';
+export { inspectEncryptedTripletHeader } from './asdcp/crypto.js';
 export {
   openTrack,
   TrackReader,

@@ -22,11 +22,11 @@ try {
     'install', '--ignore-scripts', '--no-audit', '--no-fund', tarball
   ], { cwd: temporary });
   await writeFile(resolve(temporary, 'smoke.mjs'), [
-    "import { inspectMxf, openTrack, unwrap } from 'asdcp-js';",
+    "import { inspectEncryptedTripletHeader, inspectMxf, openTrack, unwrap } from 'asdcp-js';",
     "import { BlobRandomAccessSource } from 'asdcp-js/browser';",
     "import { NodeFileRandomAccessSource } from 'asdcp-js/node';",
     "import { readKlvHeader } from 'asdcp-js/mxf';",
-    'for (const value of [inspectMxf, openTrack, unwrap, BlobRandomAccessSource, NodeFileRandomAccessSource, readKlvHeader]) {',
+    'for (const value of [inspectEncryptedTripletHeader, inspectMxf, openTrack, unwrap, BlobRandomAccessSource, NodeFileRandomAccessSource, readKlvHeader]) {',
     "  if (typeof value !== 'function') throw new Error('Missing package export');",
     '}',
     "console.log('Package entry points load');",

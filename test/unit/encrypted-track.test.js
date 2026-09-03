@@ -5,8 +5,15 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import test from 'node:test';
-import { DecryptionError, inspectMxf, MemoryRandomAccessSource, openTrack } from '../../src/index.js';
+import {
+  DecryptionError,
+  inspectEncryptedTripletHeader,
+  inspectMxf,
+  MemoryRandomAccessSource,
+  openTrack
+} from '../../src/index.js';
 import { deriveSmpteMicKey } from '../../src/asdcp/crypto.js';
+import { readKlvHeader } from '../../src/mxf/klv.js';
 import { NodeFileRandomAccessSource } from '../../src/node.js';
 
 const fixtureRoot = resolve(import.meta.dirname, '../fixtures/encrypted-mxf');
@@ -23,6 +30,65 @@ test('SMPTE MIC-key derivation matches AS-DCP Lib 2.13.3', () => {
     Buffer.from(deriveSmpteMicKey(key)).toString('hex'),
     '7a98c16cb6ca2aedbae8318d9aceb2a6'
   );
+});
+
+test('encrypted triplet headers expose a keyless plaintext source range', () => {
+  const sourceKey = Uint8Array.from(
+    '060e2b34010201010d01030115010801'.match(/../gu),
+    (byte) => Number.parseInt(byte, 16)
+  );
+  const value = encryptedTripletPrefix({
+    plaintextOffset: 23n,
+    sourceLength: 100n,
+    sourceKey,
+    encryptedSourceValueLength: 96n
+  });
+
+  assert.deepEqual(
+    inspectEncryptedTripletHeader(value.subarray(0, 12), { valueLength: 200n }),
+    { status: 'need-more' }
+  );
+  const header = inspectEncryptedTripletHeader(value, { valueLength: 200n });
+  assert.equal(header.status, 'parsed');
+  assert.equal(header.plaintextOffset, 23n);
+  assert.equal(header.sourceLength, 100n);
+  assert.equal(header.sourceKey, '060e2b34010201010d01030115010801');
+  assert.equal(header.plaintextValueOffset, header.encryptedSourceValueOffset + 32n);
+  assert.equal(header.plaintextValueLength, 23n);
+});
+
+test('encrypted triplet header inspection rejects impossible plaintext ranges', () => {
+  const value = encryptedTripletPrefix({
+    plaintextOffset: 101n,
+    sourceLength: 100n,
+    sourceKey: new Uint8Array(16),
+    encryptedSourceValueLength: 160n
+  });
+  assert.throws(
+    () => inspectEncryptedTripletHeader(value, { valueLength: 200n }),
+    (error) => error instanceof DecryptionError && error.code === 'ERR_ENCRYPTED_TRIPLET'
+  );
+});
+
+test('encrypted triplet metadata can be inspected from a real frame without its key', async () => {
+  const source = await NodeFileRandomAccessSource.open(fixture);
+  try {
+    const inspection = await inspectMxf(source, { includeIndex: true });
+    const bodyPartition = inspection.structure.bodyPartitions[0];
+    const headerPartition = inspection.structure.headerPartition;
+    const bodyOffset = bodyPartition?.klv.endOffset ??
+      headerPartition.klv.endOffset + headerPartition.headerByteCount;
+    const klv = await readKlvHeader(source, bodyOffset);
+    const prefix = await source.read(klv.valueOffset, 128n);
+    const header = inspectEncryptedTripletHeader(prefix, { valueLength: klv.length });
+
+    assert.equal(header.status, 'parsed');
+    assert.equal(header.sourceKey, '060e2b34010201010d01030115010801');
+    assert.equal(header.sourceLength, 499548n);
+    assert.equal(header.plaintextOffset, 0n);
+  } finally {
+    await source.close();
+  }
 });
 
 test('encrypted frame extraction decrypts and verifies HMAC', async () => {
@@ -117,3 +183,48 @@ test('encrypted stereoscopic eye pairs use consecutive left and right integrity 
     await source.close();
   }
 });
+
+function encryptedTripletPrefix({
+  plaintextOffset,
+  sourceLength,
+  sourceKey,
+  encryptedSourceValueLength
+}) {
+  return concat(
+    field(new Uint8Array(16)),
+    field(uint64(plaintextOffset)),
+    field(sourceKey),
+    field(uint64(sourceLength)),
+    ber(encryptedSourceValueLength)
+  );
+}
+
+function field(value) {
+  return concat(ber(BigInt(value.byteLength)), value);
+}
+
+function ber(value) {
+  if (value < 0x80n) return Uint8Array.of(Number(value));
+  const body = [];
+  while (value > 0n) {
+    body.unshift(Number(value & 0xffn));
+    value >>= 8n;
+  }
+  return Uint8Array.of(0x80 | body.length, ...body);
+}
+
+function uint64(value) {
+  const bytes = new Uint8Array(8);
+  new DataView(bytes.buffer).setBigUint64(0, value, false);
+  return bytes;
+}
+
+function concat(...arrays) {
+  const bytes = new Uint8Array(arrays.reduce((sum, array) => sum + array.byteLength, 0));
+  let offset = 0;
+  for (const array of arrays) {
+    bytes.set(array, offset);
+    offset += array.byteLength;
+  }
+  return bytes;
+}
