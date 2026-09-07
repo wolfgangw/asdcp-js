@@ -10,6 +10,42 @@ JavaScript safe integer range are `bigint`. Raw bytes are `Uint8Array`. Maps in
 the returned metadata structures are actual `Map` instances. Results therefore
 are not directly JSON-serializable.
 
+## Partial frame access
+
+`TrackReader.readFrameInfo()` uses the existing index and validates the essence
+KLV without loading the whole value. `readFrameRange()` reads only the requested
+byte range after the same validation. Both support indexed essence types without
+interpreting their content. Stereo requires an explicit `eye`; non-stereo rejects
+an eye argument. Offsets and lengths must be non-negative safe integers or bigint;
+out-of-bounds ranges fail rather than being truncated. An empty range at the end
+is allowed. Source read limits and cancellation apply.
+
+```ts
+interface FrameInfo {
+  frameNumber: number;
+  eye: 'left' | 'right' | null;
+  streamOffset: bigint;
+  fileOffset: bigint;   // essence KLV start
+  valueOffset: bigint;  // actual essence bytes start
+  length: bigint;       // full essence length, also in a range result
+  klv: KlvHeader;
+  mediaType: string;
+  encrypted: false;
+}
+```
+
+The KLV parser probes up to 25 bytes at each packet header, potentially including
+a few initial value bytes. Range access repeats this small header validation; it
+does not cache or retain full frames. A caller can first obtain `length`, then
+request a prefix, suffix or complete value. There is no JPEG2000 header parsing,
+duplicate detection or other content interpretation here.
+
+These two methods currently reject encrypted tracks with
+`ERR_PARTIAL_FRAME_ENCRYPTED`, even if a key was supplied. They never return
+ciphertext as plaintext essence or silently read/decrypt a whole encrypted frame.
+The existing `openTrack()` key requirement and full-frame decryption/HMAC APIs
+are unchanged. `inspectEncryptedTripletHeader()` remains a separate facility.
+
 ## Random-access source
 
 ```ts
@@ -389,6 +425,25 @@ interface TrackReader {
     frameNumber: number | bigint,
     options?: { signal?: AbortSignal }
   ): Promise<FrameResult>;
+
+  readFrameInfo(
+    frameNumber: number | bigint,
+    options?: { eye?: 'left' | 'right'; signal?: AbortSignal }
+  ): Promise<FrameInfo>;
+
+  readFrameRange(
+    frameNumber: number | bigint,
+    options: {
+      offset?: number | bigint; // default 0, relative to essence value
+      length: number | bigint; // required; no implicit full-frame read
+      eye?: 'left' | 'right';
+      signal?: AbortSignal;
+    }
+  ): Promise<FrameInfo & {
+    offset: bigint;
+    data: Uint8Array;
+    hmacVerified: null;
+  }>;
 
   readStereoscopicFrame(
     frameNumber: number | bigint,

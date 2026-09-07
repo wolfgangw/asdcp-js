@@ -76,6 +76,55 @@ export class TrackReader {
   }
 
   async readIndexedFrame(frameNumber, eye, signal) {
+    const { normalizedFrame, streamOffset, klv } = await this.locateIndexedFrame(frameNumber, eye, signal);
+    return this.decodeFrameResult(
+      this.source, klv, normalizedFrame, eye, streamOffset, 0n, signal
+    );
+  }
+
+  // File-access facts only: no interpretation of the essence payload.
+  async readFrameInfo(frameNumber, { eye, signal } = {}) {
+    signal?.throwIfAborted();
+    if (this.inspection.writerInfo.encryptedEssence) {
+      throw new TrackReaderError('Partial frame access requires unencrypted essence', {}, {
+        code: 'ERR_PARTIAL_FRAME_ENCRYPTED'
+      });
+    }
+    const normalizedEye = normalizeFrameEye(this.essenceType, eye);
+    const { normalizedFrame, streamOffset, klv } = await this.locateIndexedFrame(
+      frameNumber, normalizedEye, signal
+    );
+    return {
+      frameNumber: Number(normalizedFrame), eye: normalizedEye, streamOffset,
+      fileOffset: klv.valueOffset - klv.headerLength,
+      valueOffset: klv.valueOffset, length: klv.length, klv,
+      mediaType: this.format.mediaType, encrypted: false
+    };
+  }
+
+  async readFrameRange(frameNumber, { offset = 0n, length, eye, signal } = {}) {
+    signal?.throwIfAborted();
+    const start = normalizeByteRangeValue(offset, 'offset');
+    const count = normalizeByteRangeValue(length, 'length');
+    const info = await this.readFrameInfo(frameNumber, { eye, signal });
+    if (start > info.length || count > info.length - start) {
+      throw new TrackReaderError('Requested byte range is outside the frame essence', {
+        frameNumber: info.frameNumber, offset: start, length: count, frameLength: info.length
+      });
+    }
+    if (count > BigInt(Number.MAX_SAFE_INTEGER) ||
+        (this.source.maxReadBytes !== undefined && count > BigInt(this.source.maxReadBytes))) {
+      throw new TrackReaderError('Requested frame byte range exceeds the source read limit');
+    }
+    signal?.throwIfAborted();
+    const data = count === 0n ? new Uint8Array(0) : await trackOperation(
+      this.source.read(info.valueOffset + start, count, { signal }),
+      { frameNumber: info.frameNumber, fileOffset: info.valueOffset + start }
+    );
+    return { ...info, offset: start, data, hmacVerified: null };
+  }
+
+  async locateIndexedFrame(frameNumber, eye, signal) {
     signal?.throwIfAborted();
     const normalizedFrame = normalizeFrameNumber(frameNumber);
     if (this.duration === null || normalizedFrame >= this.duration) {
@@ -99,9 +148,7 @@ export class TrackReader {
         this.source, leftKlv.endOffset, normalizedFrame, 'right', signal, 0n, editUnitEndOffset
       )
       : leftKlv;
-    return this.decodeFrameResult(
-      this.source, klv, normalizedFrame, eye, streamOffset, 0n, signal
-    );
+    return { normalizedFrame, streamOffset, klv };
   }
 
   async readStereoscopicFramePair(frameNumber, { signal } = {}) {
@@ -784,6 +831,13 @@ async function trackOperation(operation, details) {
       causeName: error.name
     }, { cause: error });
   }
+}
+
+function normalizeByteRangeValue(value, name) {
+  if ((typeof value !== 'bigint' && !Number.isSafeInteger(value)) || value < 0) {
+    throw new TypeError(`${name} must be a non-negative safe integer or bigint`);
+  }
+  return BigInt(value);
 }
 
 function normalizeFrameNumber(value) {

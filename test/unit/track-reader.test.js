@@ -320,6 +320,74 @@ test('PCM WAV unwrapping emits an RF64 header above the RIFF size limit', async 
   assert.equal(new DataView(first.value.data.buffer).getBigUint64(28, true), duration * 4n);
 });
 
+test('frame info and ranges read only KLV probes and requested essence bytes', async () => {
+  const payload = Array.from({ length: 100 }, (_, index) => index);
+  const packet = makeEssencePacket(payload);
+  const source = new MemoryRandomAccessSource(packet);
+  const calls = [];
+  const read = source.read.bind(source);
+  source.read = (offset, length, options) => {
+    calls.push({ offset, length });
+    return read(offset, length, options);
+  };
+  const track = await openTrack(source, { inspection: makeInspection([{ streamOffset: 0n }], { duration: 1n }) });
+  const info = await track.readFrameInfo(0);
+  assert.equal(info.valueOffset, 17n);
+  assert.equal(info.length, 100n);
+  assert.equal(info.encrypted, false);
+  assert.deepEqual(calls, [{ offset: 0n, length: 25n }]);
+  calls.length = 0;
+  const range = await track.readFrameRange(0, { offset: 40, length: 3n });
+  assert.deepEqual(range.data, Uint8Array.of(40, 41, 42));
+  assert.equal(range.offset, 40n);
+  assert.equal(range.length, 100n);
+  assert.deepEqual(calls, [{ offset: 0n, length: 25n }, { offset: 57n, length: 3n }]);
+  assert.deepEqual((await track.readFrameRange(0, { length: 4 })).data, Uint8Array.of(0, 1, 2, 3));
+  assert.deepEqual((await track.readFrameRange(0, { length: 100 })).data, (await track.readFrame(0)).data);
+  calls.length = 0;
+  assert.equal((await track.readFrameRange(0, { offset: 100, length: 0 })).data.length, 0);
+  assert.equal(calls.length, 1, 'empty range does not read payload');
+  for (const options of [{offset: -1, length: 1}, {length: 1.5}, {}, {length: '4'}, {length: Number.MAX_SAFE_INTEGER + 1}]) {
+    await assert.rejects(track.readFrameRange(0, options), TypeError);
+  }
+  for (const options of [{offset: 99, length: 2}, {offset: 101, length: 0}]) {
+    await assert.rejects(track.readFrameRange(0, options), /outside the frame essence/);
+  }
+  await assert.rejects(track.readFrameInfo(1), /outside the track duration/);
+  source.maxReadBytes = 32n;
+  await assert.rejects(track.readFrameRange(0, {length: 33}), /source read limit/);
+  const controller = new AbortController(); controller.abort();
+  calls.length = 0;
+  await assert.rejects(track.readFrameRange(0, {length: 1, signal: controller.signal}), {name: 'AbortError'});
+  assert.equal(calls.length, 0);
+});
+
+test('partial frame access selects stereo eyes explicitly and respects index boundaries', async () => {
+  const left = makeEssencePacket([1, 2, 3]);
+  const right = makeEssencePacket([4, 5, 6]);
+  const source = new MemoryRandomAccessSource(Uint8Array.from([...left, ...right]));
+  const inspection = makeInspection([{streamOffset: 0n}], {duration: 1n, essenceType: 'jpeg-2000-stereoscopic'});
+  const track = await openTrack(source, {inspection});
+  await assert.rejects(track.readFrameInfo(0), /eye must/);
+  assert.deepEqual((await track.readFrameRange(0, {eye:'right', offset:1, length:1})).data, Uint8Array.of(5));
+  assert.equal((await track.readFrameInfo(0, {eye:'left'})).valueOffset, 17n);
+  inspection.essence.editUnitCount = 2n;
+  inspection.footerIndex.segments[0].indexDuration = 2n;
+  inspection.footerIndex.segments[0].indexEntries.push({streamOffset: BigInt(left.length)});
+  const broken = await openTrack(source, {inspection});
+  await assert.rejects(broken.readFrameInfo(0, {eye:'right'}), /outside the indexed edit unit/);
+});
+
+test('partial access never exposes ciphertext as essence, even with a supplied key', async () => {
+  const source = new CountingSource(makeEssencePacket([1]));
+  const inspection = makeInspection([{streamOffset:0n}], {duration:1n, encrypted:true});
+  await assert.rejects(openTrack(source, {inspection}), {code:'ERR_ENCRYPTION_KEY_REQUIRED'});
+  const track = await openTrack(source, {inspection, key:new Uint8Array(16)});
+  await assert.rejects(track.readFrameInfo(0), {code:'ERR_PARTIAL_FRAME_ENCRYPTED'});
+  await assert.rejects(track.readFrameRange(0, {length:1}), {code:'ERR_PARTIAL_FRAME_ENCRYPTED'});
+  assert.equal(source.readCount, 0);
+});
+
 function makeEssencePacket(value, dictionaryName = 'JPEG2000Essence') {
   const key = hexBytes(`${mdd(dictionaryName).ulHex.slice(0, 30)}01`);
   return Uint8Array.from([...key, value.length, ...value]);
