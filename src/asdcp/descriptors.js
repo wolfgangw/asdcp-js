@@ -500,7 +500,8 @@ export function parseTimedTextDescriptor(headerMetadata) {
     ucsEncoding: readUtf16(value(descriptor, 'TimedTextDescriptor_UCSEncoding')),
     namespaceName: readUtf16(value(descriptor, 'TimedTextDescriptor_NamespaceURI')),
     rfc5646LanguageTagList: readOptionalUtf16(descriptor, 'TimedTextDescriptor_RFC5646LanguageTagList'),
-    dataEssenceCodingUl: toHex(value(descriptor, 'GenericDataEssenceDescriptor_DataEssenceCoding')),
+    // Preserve absence rather than aborting access or inventing a zero UL.
+    dataEssenceCodingUl: readNullableUl(optionalValue(descriptor, 'GenericDataEssenceDescriptor_DataEssenceCoding')),
     displayType: readOptionalUtf16(descriptor, 'TimedTextDescriptor_DisplayType'),
     intrinsicPictureResolution: readOptionalUtf16(descriptor, 'TimedTextDescriptor_IntrinsicPictureResolution'),
     zPositionInUse: readOptionalUint8(descriptor, 'TimedTextDescriptor_ZPositionInUse'),

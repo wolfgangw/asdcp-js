@@ -370,6 +370,24 @@ test('timed-text descriptor aggregates ancillary resources', () => {
   }]);
 });
 
+test('timed-text descriptor preserves absent DataEssenceCoding as null', () => {
+  const descriptor = parseTimedTextDescriptor(metadata([
+    set('TimedTextDescriptor', {
+      FileDescriptor_SampleRate: rational(24, 1),
+      FileDescriptor_ContainerDuration: i64(216n),
+      TimedTextDescriptor_ResourceID: uuid(1),
+      TimedTextDescriptor_UCSEncoding: utf16('UTF-8'),
+      TimedTextDescriptor_NamespaceURI: utf16('http://www.smpte-ra.org/schemas/428-7/2014/DCST')
+    })
+  ]));
+  assert.equal(descriptor.dataEssenceCodingUl, null);
+  assert.equal(descriptor.type, 'timed-text');
+  assert.equal(descriptor.containerDuration, 216n);
+  assert.equal(descriptor.ucsEncoding, 'UTF-8');
+  assert.equal(descriptor.namespaceName, 'http://www.smpte-ra.org/schemas/428-7/2014/DCST');
+  assert.deepEqual(descriptor.resources, []);
+});
+
 test('generic data and Atmos descriptors remain distinct', () => {
   const coding = Uint8Array.of(0x06, 0x0e, 0x2b, 0x34, 4, 1, 1, 5, 0x0e, 9, 6, 4, 0, 0, 0, 0);
   const atmos = set('DolbyAtmosSubDescriptor', {
