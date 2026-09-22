@@ -8,6 +8,7 @@ import { readHeaderMetadata } from '../mxf/header-metadata.js';
 import { readFooterIndex } from '../mxf/index-table.js';
 import { buildMetadataGraph } from '../mxf/metadata-graph.js';
 import { openMxfStructure } from '../mxf/structure.js';
+import { readPartitionPack, PartitionError } from '../mxf/partition.js';
 
 const KEYS = {
   identification: mdd('Identification').ulHex,
@@ -49,13 +50,14 @@ const CRYPTO_ULS = {
 
 const HMAC_SHA1_ALGORITHM = mdd('MICAlgorithm_HMAC_SHA1').ulHex;
 
-export async function inspectMxf(source, { signal, includeIndex = false } = {}) {
+export async function inspectMxf(source, { signal, includeIndex = false, headerOnly = false } = {}) {
   if (!source || typeof source.read !== 'function' || typeof source.size !== 'bigint') {
     throw new TypeError('source must expose bigint size and asynchronous read(offset, length)');
   }
   if (typeof includeIndex !== 'boolean') throw new TypeError('includeIndex must be a boolean');
+  if (typeof headerOnly !== 'boolean') throw new TypeError('headerOnly must be a boolean');
   try {
-    return await inspectMxfInternal(source, { signal, includeIndex });
+    return await inspectMxfInternal(source, { signal, includeIndex, headerOnly });
   } catch (error) {
     if (error instanceof InspectionError || error?.name === 'AbortError') throw error;
     throw new InspectionError(error.message, {
@@ -65,8 +67,19 @@ export async function inspectMxf(source, { signal, includeIndex = false } = {}) 
   }
 }
 
-async function inspectMxfInternal(source, { signal, includeIndex }) {
-  const structure = await openMxfStructure(source, { signal });
+async function inspectMxfInternal(source, { signal, includeIndex, headerOnly }) {
+  let structure;
+  if (headerOnly) {
+    const headerPartition = await readPartitionPack(source, 0n, { signal });
+    if (headerPartition.kind !== 'header') throw new PartitionError('MXF does not start with a Header Partition Pack');
+    structure = {
+      sourceSize: source.size, headerPartition, partitions: [headerPartition],
+      bodyPartitions: [], genericStreamPartitions: [], footerPartition: null,
+      randomIndexPack: null, issues: [...headerPartition.issues]
+    };
+  } else {
+    structure = await openMxfStructure(source, { signal });
+  }
   if (!structure.headerPartition) throw new Error('MXF has no header partition');
   const headerMetadata = await readHeaderMetadata(source, structure.headerPartition, { signal });
   const metadataGraph = buildMetadataGraph(headerMetadata);
@@ -117,6 +130,7 @@ async function inspectMxfInternal(source, { signal, includeIndex }) {
     ? calculatePictureBitrate(essence, footerIndex) : null;
 
   return {
+    ...(headerOnly ? { inspectionScope: 'header-only' } : {}),
     structure,
     headerMetadata,
     metadataGraph,

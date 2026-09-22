@@ -55,6 +55,14 @@ const firstFrame = await track.readFrame(0);
 
 Node.js file access:
 
+For partial inspection of a damaged file, `inspectMxf(source, { headerOnly: true })`
+reads and parses only the leading Header Partition and its declared metadata.
+Malformed or out-of-bounds header data still fails. Successful results carry
+`inspectionScope: 'header-only'`; they have no RIP, footer index or verified
+essence availability, and cannot be used to open a track for playback. This
+option does not perform index reads even when `includeIndex` is requested.
+Header metadata describes the declared asset, not the surviving essence.
+
 ```js
 import { inspectMxf } from 'asdcp-js';
 import { NodeFileRandomAccessSource } from 'asdcp-js/node';
