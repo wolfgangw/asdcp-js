@@ -17,6 +17,21 @@ const keys = {
   rip: hex('060e2b34020501010d01020101110100')
 };
 
+test('footer beyond or at EOF fails before any RIP-tail access', async () => {
+  for (const length of [400, 512]) {
+    const source = new MemoryRandomAccessSource(makeMxf().slice(0, length));
+    const read = source.read.bind(source);
+    const reads = [];
+    source.read = (offset, count, options) => {
+      reads.push({ offset, count });
+      return read(offset, count, options);
+    };
+    await assert.rejects(openMxfStructure(source), /Footer Partition at byte 512, outside the file size/);
+    assert.ok(reads.every(({ offset, count }) => offset + count < BigInt(length)),
+      'only the leading partition is read, never the tail');
+  }
+});
+
 test('openMxfStructure parses partitions referenced by a valid RIP', async () => {
   const file = makeMxf();
   const structure = await openMxfStructure(new MemoryRandomAccessSource(file));
@@ -63,6 +78,10 @@ test('Generic Stream Partitions remain separate from frame-bearing body partitio
 });
 
 test('RIP parsing rejects impossible sizes, wrong keys, and malformed pairs', async () => {
+  const junk = new Uint8Array(64);
+  junk[16] = 0xff; // Invalid BER must not be interpreted under an invalid key.
+  new DataView(junk.buffer).setUint32(60, 64);
+  await assert.rejects(readRandomIndexPack(new MemoryRandomAccessSource(junk)), /wrong key/);
   await assert.rejects(
     readRandomIndexPack(new MemoryRandomAccessSource(new Uint8Array(20))),
     RandomIndexPackError

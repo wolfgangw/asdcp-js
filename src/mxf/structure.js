@@ -1,16 +1,27 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
-import { readPartitionPack } from './partition.js';
+import { PartitionError, readPartitionPack } from './partition.js';
 import { readRandomIndexPack } from './random-index-pack.js';
 
 export async function openMxfStructure(source, { signal } = {}) {
+  const leadingHeader = await readPartitionPack(source, 0n, { signal });
+  if (leadingHeader.kind !== 'header') {
+    throw new PartitionError('MXF does not start with a Header Partition Pack');
+  }
+  if (leadingHeader.footerPartition !== 0n && leadingHeader.footerPartition >= source.size) {
+    throw new PartitionError(
+      `MXF declares a Footer Partition at byte ${leadingHeader.footerPartition}, outside the file size of ${source.size} bytes`,
+      { footerPartition: leadingHeader.footerPartition, fileSize: source.size }
+    );
+  }
   const randomIndexPack = await readRandomIndexPack(source, { signal });
   const partitions = [];
   const issues = [...randomIndexPack.issues];
 
   for (let index = 0; index < randomIndexPack.entries.length; index += 1) {
     const entry = randomIndexPack.entries[index];
-    const partition = await readPartitionPack(source, entry.byteOffset, { signal });
+    const partition = entry.byteOffset === 0n ? leadingHeader
+      : await readPartitionPack(source, entry.byteOffset, { signal });
     partitions.push(partition);
     issues.push(...partition.issues.map((issue) => ({ ...issue, partitionIndex: index })));
     if (partition.bodySid !== entry.bodySid) {

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 import { ByteReader } from '../binary/byte-reader.js';
+import { toHex } from '../binary/identifiers.js';
 import { readKlvHeader, readKlvValue } from './klv.js';
 import { RANDOM_INDEX_PACK_KEY_HEX } from './labels.js';
 
@@ -36,6 +37,12 @@ export async function readRandomIndexPack(source, { signal } = {}) {
   }
 
   const offset = source.size - ripSize;
+  const keyHex = toHex(await source.read(offset, 16n, { signal }));
+  if (keyHex !== RANDOM_INDEX_PACK_KEY_HEX) {
+    throw new RandomIndexPackError('KLV at Random Index Pack offset has the wrong key', {
+      offset, expected: RANDOM_INDEX_PACK_KEY_HEX, actual: keyHex
+    });
+  }
   const klv = await readKlvHeader(source, offset, { signal });
   if (klv.keyHex !== RANDOM_INDEX_PACK_KEY_HEX) {
     throw new RandomIndexPackError('KLV at Random Index Pack offset has the wrong key', {

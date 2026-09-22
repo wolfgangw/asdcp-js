@@ -16,7 +16,7 @@ test('inspectMxf wraps malformed-input failures and preserves their cause', asyn
       error instanceof InspectionError
       && error.code === 'ERR_INSPECTION'
       && error.details.sourceName === 'bad.mxf'
-      && error.cause?.name === 'RandomIndexPackError'
+      && error.cause?.name === 'KlvError'
     )
   );
 });
